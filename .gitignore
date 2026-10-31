@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+
+# CryptPouch runtime artifacts
+*.enc
+*.dec
+rsa_private.pem
+rsa_public.pem
+*.png
+*.tmp
+temp_*
+
+# Environments
+.env
+.venv/
+venv/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
