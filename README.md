@@ -34,6 +34,20 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+> **⚠ Important: `pyzbar` needs the system library `libzbar`**
+>
+> `pyzbar` is only a Python wrapper; it depends on a system library named
+> `libzbar`. Running `pip install -r requirements.txt` alone will fail if that
+> library is missing, so install it first on your platform:
+
+| Platform | Installation |
+| --- | --- |
+| Windows | Download the Zbar DLL and add the directory containing `libzbar-64.dll` to your system PATH environment variable |
+| Ubuntu / Debian | `sudo apt-get install libzbar0` |
+| macOS | `brew install zbar` |
+
+> All other dependencies can be installed directly with pip.
+
 ## Usage
 
 Run the interactive menu:
