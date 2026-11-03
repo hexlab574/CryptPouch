@@ -8,8 +8,10 @@ the known security considerations of the project.
 
 The following version series currently receive security support:
 
-- 2.7.x — actively supported (latest: 2.7.2)
-- 2.6.x — supported for migration only; users are encouraged to upgrade
+- 2.9.x  -  actively supported (latest: 2.9.0)
+- 2.8.x  -  supported
+- 2.7.x  -  supported for migration only; users are encouraged to upgrade
+- 2.6.x  -  supported for migration only; users are encouraged to upgrade
 
 Earlier versions are no longer supported and may contain known issues that
 have been fixed in later releases.
@@ -95,6 +97,23 @@ Round 3 (2.7.1 to 2.7.2) fixed 5 items:
 - word-plus-year password pattern detection;
 - password strength thresholds and QR length limit exposed as tunable
   constants.
+
+Round 4 (2.8.0 to 2.9.0) added 6 items:
+
+- external weak-password dictionary: validated path (NUL rejected, normalized),
+  a 32 MB size cap, and fail-safe skip with a warning so an optional dictionary
+  can never break the main flow;
+- password retry cap (MAX_PASSWORD_ATTEMPTS = 5) extended to the automatic
+  decryption path (analyze-and-decrypt and forced family attempts);
+- sliding-window QWERTY keyboard-pattern detection (rows, columns, diagonals)
+  merged with the existing fixed-pattern check, threshold configurable;
+- whole "word + year" scoring (1900-2099) so birthdays and anniversaries are
+  not penalized merely for containing a year;
+- set_config() validates and atomically writes the config file (unknown keys
+  and invalid values are rejected, preserving the CLI > env > config >
+  defaults priority);
+- ANSI color output is configurable and disabled by default for redirected
+  output (color=auto/on/off).
 
 ## Known Security Considerations
 
