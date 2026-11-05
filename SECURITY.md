@@ -8,7 +8,8 @@ the known security considerations of the project.
 
 The following version series currently receive security support:
 
-- 2.9.x  -  actively supported (latest: 2.9.0)
+- 2.10.x  -  actively supported (latest: 2.10.0)
+- 2.9.x  -  supported (latest: 2.9.0)
 - 2.8.x  -  supported
 - 2.7.x  -  supported for migration only; users are encouraged to upgrade
 - 2.6.x  -  supported for migration only; users are encouraged to upgrade
@@ -114,6 +115,26 @@ Round 4 (2.8.0 to 2.9.0) added 6 items:
   defaults priority);
 - ANSI color output is configurable and disabled by default for redirected
   output (color=auto/on/off).
+
+Round 5 (2.9.0 to 2.10.0) added 6 items:
+
+- modular codebase: the single 2,600-line script was split into single-purpose
+  modules (cp_shared / cp_crypto / cp_utils / cp_files / cp_admin) behind a thin
+  entry shell, with the full 77-test suite passing against the deployed layout;
+- configurable file size cap (max_file_size, default 0 = no limit) enforced at
+  every file encrypt/decrypt entry point, so an accidentally targeted huge file
+  is rejected with a clear message instead of consuming resources;
+- atomic decryption output: plaintext is written to a temp file in the target
+  directory and swapped in via os.replace only after the GCM tag verifies; a
+  failed or interrupted decrypt never leaves a partial output file;
+- symmetric cleanup on encryption: a failed/interrupted encrypt removes the
+  partial ciphertext instead of leaving a truncated file behind;
+- administrator elevation for dependency install is gated on explicit user
+  consent: elevation is offered only after a permission-denied install, never
+  attempted silently, and a UAC prompt appears only when the user agrees;
+- password-safe process restart: the restart argv strips -p/--password and
+  --password=... so a command-line password is never re-exposed to a child
+  process.
 
 ## Known Security Considerations
 

@@ -1,25 +1,49 @@
 # CryptPouch
 
-AES-256 encryption toolbox for local, single-user use. Version 2.9.0.
+AES-256 encryption toolbox for local, single-user use. Version 2.10.0.
 
 Interactive menu and command-line interface, with Chinese and English prompts.
 
 ## Features
 
+- Modular codebase (v2.10.0): core engine, utilities, file operations and admin
+  helpers are split into small single-purpose modules behind a thin `CryptPouch.py`
+  entry point
 - Text encryption: AES-256-GCM (Argon2id, v3 format), AES-256-CBC + HMAC and ChaCha20-Poly1305 (v2.8.0)
 - One-step key rotation / format upgrade (re-encrypt with a new password)
 - Batch recursive encryption/decryption of directories with glob filters
 - Streaming file encryption/decryption, memory friendly for large files, with numbered copies to prevent overwrites
+- Configurable file size cap (`max_file_size`) to protect against accidental processing of huge files (0 = no limit)
+- Atomic decryption output: plaintext is written to a temp file and swapped in only after the tag verifies
 - RSA asymmetric encryption, 2048/3072/4096-bit keys, optional passphrase-protected private key
 - Base64 encode/decode, text and file hashing, random password generation
 - Password strength checker with external weak-password dictionary, QWERTY keyboard-pattern and word-plus-year detection (v2.9.0)
 - Programmatic config write-back via `set_config()` (merge, validate, atomic write, keeps env priority)
 - Zero-dependency ANSI color output (yellow warnings, red errors; `color` config auto/on/off)
 - Zero-dependency test runner `run_tests.py` with green pass markers
+- Administrator elevation for dependency install, only after explicit user consent (UAC prompt)
 - QR code generation and decoding
 - Automatic ciphertext type detection, with a compatibility probe matrix for legacy ciphertext
 - Automatic encoding detection (UTF-8, GBK, Big5, Shift_JIS)
 - CLI mode, including --password-file for safe password handling
+
+## Project structure
+
+The v2.10.0 codebase is modular. `CryptPouch.py` is a thin shell that imports and
+re-exports the public symbols; each module has a single responsibility:
+
+| File | Responsibility |
+| --- | --- |
+| `CryptPouch.py` | Entry point: interactive menu, CLI parser, public symbol re-export |
+| `cp_shared.py` | i18n, printer (ANSI), config loading/validation, constants, error classes |
+| `cp_crypto.py` | Cipher tools (GCM/CBC/ChaCha20), key derivation, hashing, password strength |
+| `cp_utils.py` | Safe input, password-length checks, permission restriction, decrypt retry |
+| `cp_files.py` | Streaming file encrypt/decrypt (atomic output), batch and re-encrypt helpers |
+| `cp_admin.py` | Dependency install with consent-gated UAC elevation; password-safe restart |
+
+All modules are part of the same package and share state through `cp_shared`; there
+are no circular imports (`cp_shared` <- `cp_crypto` <- `cp_utils` <- `cp_files`,
+with `cp_admin` on top).
 
 ## Feature Overview & Use Cases
 
@@ -123,6 +147,7 @@ Password-strength options (configurable via config.json or environment variables
 | `keyboard_pattern_min_len` | `4` | minimum run length for a keyboard-pattern hit |
 | `check_year_patterns` | `true` | penalize only whole "word + year" passwords (years 1900-2099) |
 | `color` | `auto` | ANSI color output for warnings/errors: `auto` (real terminal), `on`, `off` |
+| `max_file_size` | `0` | file size cap in bytes for file encrypt/decrypt; `0` = no limit (large files are supported) |
 
 ## License
 

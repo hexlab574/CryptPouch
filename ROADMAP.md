@@ -1,5 +1,18 @@
 # CryptPouch Roadmap
 
+## Released: v2.10.0 (2026-11)
+
+Implemented in this release:
+
+| # | Feature | Details |
+| --- | --- | --- |
+| 1 | Modular codebase | The single-file script was split into single-purpose modules (`cp_shared` / `cp_crypto` / `cp_utils` / `cp_files` / `cp_admin`) behind a thin `CryptPouch.py` entry shell. The public symbol surface (menu, CLI, API wrapper) is unchanged; the full 77-test suite passes against the deployed multi-file layout. |
+| 2 | Large-file guard | Streaming v3 encryption/decryption already handles large files; a configurable `max_file_size` cap (bytes, default 0 = no limit) now rejects accidentally targeted huge files with a clear message at every file entry point. Env override: `CRYPTPOUCH_MAX_FILE_SIZE`. |
+| 3 | Atomic decryption output | Decrypted plaintext is written to a temp file in the target directory and swapped in via `os.replace` only after the GCM tag verifies. A failed or interrupted decrypt never leaves a partial output file; encryption got the same partial-output cleanup. |
+| 4 | Consent-gated elevation | `cp_admin.is_admin()` detects elevated context; when a dependency install fails with a permission error, the tool offers an administrator retry and shows a UAC prompt only after the user explicitly agrees. Elevation is never attempted silently. |
+| 5 | Password-safe restart | The post-install process restart strips `-p` / `--password` / `--password=...` from the child argv so a command-line password is never re-exposed. |
+| 6 | Stability | Symmetric encrypt/decrypt failure cleanup, typed errors with bilingual messages for the new paths, and regression tests for size limits, atomic output and admin helpers. |
+
 ## Released: v2.9.0 (2026-11)
 
 Implemented in this release:
@@ -48,3 +61,5 @@ These directions are recorded as a roadmap only. No implementation has started.
 - New v2.9.0 config keys (`weak_password_file`, `check_keyboard_patterns`,
   `keyboard_pattern_min_len`, `check_year_patterns`, `color`) default to
   behavior identical to v2.8.0 when unset.
+- New v2.10.0 config key `max_file_size` defaults to 0 (no limit), so behavior
+  is identical to v2.9.0 when unset; existing config.json files keep working.

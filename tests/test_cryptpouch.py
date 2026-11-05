@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for CryptPouch v2.9.0.
+"""Unit tests for CryptPouch v2.10.0.
 
 Run from the CryptPouch package directory:
     python -m unittest discover -s tests -v
@@ -456,8 +456,8 @@ class MemoryHygieneTest(unittest.TestCase):
         cp._wipe_memory(data)  # must not raise
         self.assertEqual(data, b"0123456789")
 
-    def test_version_is_290(self):
-        self.assertIn("Version: 2.9.0", cp.__doc__)
+    def test_version_is_2100(self):
+        self.assertIn("Version: 2.10.0", cp.__doc__)
 
 
 class AutoDecryptRetryTest(unittest.TestCase):
@@ -489,6 +489,129 @@ class AutoDecryptRetryTest(unittest.TestCase):
         finally:
             cp.getpass.getpass = real
         self.assertEqual(len(calls), cp.MAX_PASSWORD_ATTEMPTS)
+
+
+class FileSizeLimitTest(unittest.TestCase):
+    """max_file_size config: 0 = unlimited (default), >0 blocks oversized file ops."""
+
+    def _mk(self, d, size=1024):
+        p = os.path.join(d, "payload.bin")
+        with open(p, "wb") as f:
+            f.write(b"x" * size)
+        return p
+
+    def test_zero_means_unlimited(self):
+        d = _mkdtemp()
+        try:
+            src = self._mk(d)
+            enc = os.path.join(d, "p.enc")
+            cp.CONFIG["max_file_size"] = 0
+            cp.encrypt_file(src, enc, "pw12345")
+            self.assertTrue(os.path.isfile(enc))
+        finally:
+            cp.CONFIG["max_file_size"] = 0
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_encrypt_blocked_when_over_limit(self):
+        d = _mkdtemp()
+        try:
+            src = self._mk(d)
+            enc = os.path.join(d, "p.enc")
+            cp.CONFIG["max_file_size"] = 512
+            with self.assertRaises(ValueError):
+                cp.encrypt_file(src, enc, "pw12345")
+            self.assertFalse(os.path.exists(enc))
+        finally:
+            cp.CONFIG["max_file_size"] = 0
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_decrypt_blocked_when_over_limit(self):
+        d = _mkdtemp()
+        try:
+            src = self._mk(d)
+            enc = os.path.join(d, "p.enc")
+            out = os.path.join(d, "p.out")
+            cp.CONFIG["max_file_size"] = 0
+            cp.encrypt_file(src, enc, "pw12345")
+            cp.CONFIG["max_file_size"] = 128
+            with self.assertRaises(ValueError):
+                cp.decrypt_file(enc, out, "pw12345")
+            self.assertFalse(os.path.exists(out))
+        finally:
+            cp.CONFIG["max_file_size"] = 0
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_config_validation_rejects_invalid_values(self):
+        # rejected during validation, so nothing is written to the config file
+        with self.assertRaises(ValueError):
+            cp.set_config(max_file_size=-1)
+        with self.assertRaises(ValueError):
+            cp.set_config(max_file_size="many")
+
+
+class AtomicDecryptTest(unittest.TestCase):
+    """Decryption writes to a temp file and atomically replaces the target."""
+
+    def test_wrong_password_leaves_no_output(self):
+        d = _mkdtemp()
+        try:
+            src = os.path.join(d, "a.bin")
+            with open(src, "wb") as f:
+                f.write(b"secret data" * 100)
+            enc = os.path.join(d, "a.enc")
+            out = os.path.join(d, "a.out")
+            cp.encrypt_file(src, enc, "right-pw")
+            with self.assertRaises(cp.PasswordError):
+                cp.decrypt_file(enc, out, "wrong-pw")
+            self.assertFalse(os.path.exists(out))
+            leftovers = [n for n in os.listdir(d) if ".cryptpouch.tmp" in n]
+            self.assertEqual(leftovers, [])
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_successful_decrypt_replaces_target(self):
+        d = _mkdtemp()
+        try:
+            src = os.path.join(d, "a.bin")
+            with open(src, "wb") as f:
+                f.write(b"roundtrip payload" * 50)
+            enc = os.path.join(d, "a.enc")
+            out = os.path.join(d, "a.out")
+            cp.encrypt_file(src, enc, "pw12345")
+            cp.decrypt_file(enc, out, "pw12345")
+            with open(out, "rb") as f:
+                self.assertEqual(f.read(), b"roundtrip payload" * 50)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_encrypt_unreadable_source_leaves_no_output(self):
+        d = _mkdtemp()
+        try:
+            missing = os.path.join(d, "nope.bin")
+            enc = os.path.join(d, "nope.enc")
+            with self.assertRaises(OSError):
+                cp.encrypt_file(missing, enc, "pw12345")
+            self.assertFalse(os.path.exists(enc))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+class AdminHelpersTest(unittest.TestCase):
+    def test_restart_args_strips_password_options(self):
+        import cp_admin  # underscore helpers are not re-exported by the shell
+        real = sys.argv
+        try:
+            sys.argv = ["CryptPouch.py", "-e", "-p", "secret123", "-t", "hi"]
+            self.assertEqual(cp_admin._restart_args(), ["CryptPouch.py", "-e", "-t", "hi"])
+            sys.argv = ["CryptPouch.py", "--password=secret123", "-d"]
+            self.assertEqual(cp_admin._restart_args(), ["CryptPouch.py", "-d"])
+            sys.argv = ["CryptPouch.py", "-p", "-t", "hi"]  # -p with no value
+            self.assertEqual(cp_admin._restart_args(), ["CryptPouch.py", "-t", "hi"])
+        finally:
+            sys.argv = real
+
+    def test_is_admin_returns_bool(self):
+        self.assertIsInstance(cp.is_admin(), bool)
 
 
 if __name__ == "__main__":
