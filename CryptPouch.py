@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""CryptPouch v2.10.0 - AES256 encryption toolbox (interactive menu + CLI).
-Version: 2.10.0
+"""CryptPouch v2.10.2 - AES256 encryption toolbox (interactive menu + CLI).
+Version: 2.10.2
 License: MIT
 Note: For learning, research and personal local use only.
 
@@ -29,7 +29,7 @@ from cp_admin import *
 from cp_shared import _setup_console_encoding, _ANSI, _VT_INITIALIZED, _CONFIG_ENV_MAP, _validate_config_values, _refresh_derived_constants, _ensure_vt, _color_enabled, _KEYBOARD_LAYOUT, _WEAK_DICT_CACHE
 from cp_crypto import _wipe_memory, _get_hash_module, _cbc_derive_key_pair, _note_legacy_params, _is_readable_text, _load_weak_password_dict, _keyboard_run_len
 from cp_utils import _encoding_score, _decode_with_hint, _decode_pack_b64, _safe_input, _validate_password_len, _restrict_permissions, _text_decrypt_with_retry, _handle_unexpected_error
-from cp_files import _encrypt_text_with_mode, _collect_targets, _peek_pack_prefix, _try_text_decrypt_family, _try_all_aes_decrypt
+from cp_files import _encrypt_text_with_mode, _collect_targets, _peek_pack_prefix, _try_text_decrypt_family, _try_all_aes_decrypt, _fsync_dir
 
 def show_menu():
     cp_shared.printer.info(cp_shared.i18n.t("menu_title"))
@@ -422,7 +422,7 @@ def cli_mode():
     parser.add_argument("--hash", help=i18n.t("cli_hash_help"))
     parser.add_argument("--cipher", choices=list(cp_shared.CIPHER_MODES), default="gcm", help=i18n.t("cli_cipher_help"))
     parser.add_argument("--lang", choices=["zh", "en"], default=cp_shared.CONFIG.get("lang") or "zh", help=i18n.t("cli_lang_help"))
-    parser.add_argument("--version", action="version", version="2.10.0")
+    parser.add_argument("--version", action="version", version="2.10.2")
 
     args = parser.parse_args()
 

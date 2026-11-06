@@ -1,6 +1,6 @@
 # CryptPouch
 
-AES-256 encryption toolbox for local, single-user use. Version 2.10.0.
+AES-256 encryption toolbox for local, single-user use. Version 2.10.2.
 
 Interactive menu and command-line interface, with Chinese and English prompts.
 

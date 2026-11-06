@@ -13,6 +13,23 @@ import os
 import tempfile
 from typing import Optional, List, Tuple, Dict, Any, Union
 
+def _fsync_dir(dir_path: str) -> None:
+    """Best-effort fsync of a directory so an already completed os.replace is
+    persisted across a power loss. POSIX only; Windows cannot fsync a directory
+    handle (the NTFS journal covers the rename itself). Failures are ignored on
+    purpose: this is a durability hardening step, not a functional requirement."""
+    if os.name != "posix":
+        return
+    try:
+        fd = os.open(dir_path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
 def _check_file_size(path: str) -> None:
     """Honor the configured max_file_size cap (0 = no limit). Raises ValueError
     with a user-facing message when the file is too large to process."""
@@ -61,6 +78,10 @@ def encrypt_file(input_path: str, output_path: str, password: str):
                     percent = read_size / file_size * 100
                     print(f"\rProgress: {percent:.1f}%", end="", flush=True)
             f_out.write(cipher.digest())
+            # Flush and fsync so the ciphertext is durable on disk, not just in
+            # the OS write-back cache, when the process returns.
+            f_out.flush()
+            os.fsync(f_out.fileno())
     except Exception:
         # Encryption failed: remove the partial output so no truncated
         # ciphertext is left behind (same hygiene as decryption).
@@ -125,8 +146,15 @@ def decrypt_file(input_path: str, output_path: str, password: str):
                         cipher.verify(tag)
                     except ValueError:
                         raise cp_shared.PasswordError(cp_shared.i18n.t("err_pwd_or_file_tamper"))
+                    # Persist the verified plaintext before the atomic swap: the
+                    # rename only guarantees "never half-written", so without an
+                    # fsync a crash right after os.replace could surface an
+                    # empty or short target file.
+                    f_out.flush()
+                    os.fsync(f_out.fileno())
                 os.replace(tmp_path, output_path)
                 tmp_path = None
+                _fsync_dir(os.path.dirname(os.path.abspath(output_path)) or ".")
             except Exception:
                 # Decryption failed: remove the partial temp output (and any replaced
                 # target) so no corrupted file is left behind.
@@ -162,6 +190,8 @@ def decrypt_file(input_path: str, output_path: str, password: str):
 
             with open(output_path, "wb") as f_out:
                 f_out.write(plain_data)
+                f_out.flush()
+                os.fsync(f_out.fileno())
             cp_utils._restrict_permissions(output_path)
             return
 

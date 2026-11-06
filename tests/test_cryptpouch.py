@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for CryptPouch v2.10.0.
+"""Unit tests for CryptPouch v2.10.2.
 
 Run from the CryptPouch package directory:
     python -m unittest discover -s tests -v
@@ -456,8 +456,8 @@ class MemoryHygieneTest(unittest.TestCase):
         cp._wipe_memory(data)  # must not raise
         self.assertEqual(data, b"0123456789")
 
-    def test_version_is_2100(self):
-        self.assertIn("Version: 2.10.0", cp.__doc__)
+    def test_version_is_2102(self):
+        self.assertIn("Version: 2.10.2", cp.__doc__)
 
 
 class AutoDecryptRetryTest(unittest.TestCase):
@@ -612,6 +612,17 @@ class AdminHelpersTest(unittest.TestCase):
 
     def test_is_admin_returns_bool(self):
         self.assertIsInstance(cp.is_admin(), bool)
+
+
+class FsyncDurabilityTest(unittest.TestCase):
+    def test_fsync_dir_is_noop_on_windows(self):
+        # Directory fsync is POSIX-only; on Windows the helper must silently
+        # return instead of failing the decrypt path.
+        self.assertIsNone(cp._fsync_dir(tempfile.mkdtemp()))
+
+    def test_fsync_dir_tolerates_missing_path(self):
+        # Best-effort hardening: an unreachable directory must not raise.
+        self.assertIsNone(cp._fsync_dir(os.path.join(tempfile.gettempdir(), "cp_no_such_dir_xyz")))
 
 
 if __name__ == "__main__":

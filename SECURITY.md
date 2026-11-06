@@ -8,9 +8,9 @@ the known security considerations of the project.
 
 The following version series currently receive security support:
 
-- 2.10.x  -  actively supported (latest: 2.10.0)
+- 2.10.x  -  actively supported (latest: 2.10.2)
 - 2.9.x  -  supported (latest: 2.9.0)
-- 2.8.x  -  supported
+- 2.8.x  -  supported (latest: 2.8.0)
 - 2.7.x  -  supported for migration only; users are encouraged to upgrade
 - 2.6.x  -  supported for migration only; users are encouraged to upgrade
 
@@ -58,8 +58,15 @@ disclosure where appropriate.
 
 ## Security Audit History
 
-CryptPouch has undergone four rounds of security review between versions
-2.6.1 and 2.7.2. The defect count has been reduced from 23 to 14.
+CryptPouch has undergone five rounds of security review between versions
+2.6.1 and 2.10.0. Rounds 1 to 3 were defect fixes and reduced the defect
+count from 23 to 14. Rounds 4 and 5 are hardening additions (six items each,
+worded as "added" below): they strengthen the product rather than fix known
+vulnerabilities, so the defect count is unchanged at 14.
+
+All reviews to date are author self-review. There is no third-party or paid
+security audit, and community validation is still limited; treat the
+assessments here accordingly.
 
 Round 1 (2.6.1 to 2.7.0) fixed 12 items:
 
@@ -126,7 +133,12 @@ Round 5 (2.9.0 to 2.10.0) added 6 items:
   is rejected with a clear message instead of consuming resources;
 - atomic decryption output: plaintext is written to a temp file in the target
   directory and swapped in via os.replace only after the GCM tag verifies; a
-  failed or interrupted decrypt never leaves a partial output file;
+  failed or interrupted decrypt never leaves a partial output file. Durability
+  is covered too: the temp file is flushed and fsynced before the swap, and the
+  directory is fsynced afterwards on POSIX, so a crash right after the rename
+  cannot surface an empty or short target (Windows cannot fsync a directory
+  handle; the NTFS journal covers the rename there). Encryption and the legacy
+  v2 output path fsync their output as well;
 - symmetric cleanup on encryption: a failed/interrupted encrypt removes the
   partial ciphertext instead of leaving a truncated file behind;
 - administrator elevation for dependency install is gated on explicit user
@@ -172,7 +184,18 @@ TOCTOU race in file naming
 
 - Reason: a single user on a local machine does not concurrently write the
   same directory.
-- Mitigation: decryption output uses a numbered copy rather than overwriting.
+- Mitigation: two separate mechanisms cover this, and they are not in conflict.
+  (a) Naming: when the default output name is already taken,
+  next_available_copy_name() chooses a numbered name ("file (1).txt"), so an
+  existing user file is never overwritten. (b) Writing: the plaintext is
+  written to a mkstemp temp file in the same directory and then moved onto the
+  chosen name with one os.replace, so the target path holds either the
+  previous file or the complete new file, never a half-written one. In short,
+  (a) decides which name to use, (b) atomically replaces whatever sits at that
+  name.
+- Residual risk: between the existence check in (a) and the os.replace in (b)
+  a concurrent writer could still win the race; accepted for the single-user
+  local model.
 
 RSA keys and QR images written next to the script
 

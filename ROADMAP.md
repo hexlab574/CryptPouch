@@ -1,5 +1,17 @@
 # CryptPouch Roadmap
 
+## Released: v2.10.2 (2026-11, patch)
+
+Documentation consistency fixes plus a durability hardening step:
+
+| # | Item | Details |
+| --- | --- | --- |
+| 1 | Version identity | Program version (`--version`, api `__version__`, docstrings, tests) is now 2.10.2, matching the release tag; it had lagged behind the release tags since v2.10.1. |
+| 2 | Audit history text | SECURITY.md now says five rounds (2.6.1 to 2.10.0) instead of four, states that rounds 1-3 are the defect fixes (23 to 14) while rounds 4-5 are hardening additions (six items each, count unchanged), and records that all reviews are author self-review with no third-party audit. |
+| 3 | Supported versions table | 2.8.x now lists its latest version (2.8.0) like the other series. |
+| 4 | TOCTOU wording | The numbered-copy mitigation and the os.replace swap are now documented as two separate layers (name selection vs atomic writing) instead of appearing to contradict each other; the residual race window is stated. |
+| 5 | Durable output | Output files are flushed and fsynced before returning: the verified plaintext before the atomic swap, the directory after it on POSIX, and the encoder output and legacy v2 path as well. A crash right after os.replace can no longer surface an empty or short file. Covered by two new tests (79 total). |
+
 ## Released: v2.10.1 (2026-11, patch)
 
 Bug fix release:
