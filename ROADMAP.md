@@ -1,5 +1,19 @@
 # CryptPouch Roadmap
 
+## Released: v2.11.1 (2026-11, throughput and data-loss fixes)
+
+Three user-reported problems, each reproduced before the fix. The four
+long-standing accepted boundaries (-p, no path whitelist, no constant-time
+probing, CBC same-key fallback) are still unchanged:
+
+| # | Item | Details |
+| --- | --- | --- |
+| 1 | Large-file throughput | Blocks raised from 64 KiB to 1 MiB and the progress line is redrawn at most every 0.15 s instead of once per block. A 100 MB file used to emit ~1600 console writes; it now prints a handful. Paired A/B runs on the same machine moved from 47.9 MB/s to 68.4 MB/s (median of 4 alternating rounds); the ceiling is the local disk (~115 MB/s read+write), not the cipher. |
+| 2 | In-place data loss refused | encrypt_file/decrypt_file now reject an output path that resolves to the input file (including ../ aliases). Before, the output handle truncated the input, the read stream came back empty and a 1500-byte file was replaced by a 49-byte header-only ciphertext while the call reported success. |
+| 3 | Failures are visible | CLI errors now exit with status 1 instead of 0, a wrong password is no longer masked by an "output exists" message, and batch results report succeeded / failed / skipped counts. Encrypting a directory with -f now works instead of being rejected, and decrypting over an existing file writes the next numbered copy instead of failing. |
+
+Covered by 9 new tests (98 total).
+
 ## Released: v2.11.0 (2026-11, security hardening)
 
 Round 6 hardening; the four long-standing accepted boundaries (-p, no path

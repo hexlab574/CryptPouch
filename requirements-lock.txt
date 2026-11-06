@@ -1,4 +1,4 @@
-# CryptPouch optional pinned dependency set (v2.11.0).
+# CryptPouch optional pinned dependency set (v2.11.1).
 #
 # Purpose: reproducible installs for users who want exact versions instead of
 # the lower-bound policy kept in requirements.txt. Installing this file is

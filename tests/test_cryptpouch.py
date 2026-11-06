@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for CryptPouch v2.11.0.
+"""Unit tests for CryptPouch v2.11.1.
 
 Run from the CryptPouch package directory:
     python -m unittest discover -s tests -v
@@ -158,7 +158,7 @@ class FileCryptoTest(unittest.TestCase):
         self._roundtrip(64)
 
     def test_medium_file(self):
-        self._roundtrip(200 * 1024)  # crosses several 64 KiB chunks
+        self._roundtrip(3 * 1024 * 1024)  # spans several 1 MiB blocks
 
     def test_wrong_password_file(self):
         d = _mkdtemp()
@@ -386,6 +386,119 @@ class BatchTest(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class SamePathGuardTest(unittest.TestCase):
+    """Regression: opening the output on the input path truncated the payload to
+    an empty stream and still wrote a valid-looking 49-byte ciphertext, so a
+    1500-byte file became 49 bytes while every caller reported success."""
+
+    def _victim(self, d):
+        p = os.path.join(d, "victim.txt")
+        with open(p, "wb") as f:
+            f.write(b"x" * 1500)
+        return p
+
+    def test_encrypt_in_place_is_refused(self):
+        d = _mkdtemp()
+        try:
+            p = self._victim(d)
+            with self.assertRaises(ValueError):
+                cp.encrypt_file(p, p, "pw")
+            self.assertEqual(os.path.getsize(p), 1500)  # payload untouched
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_encrypt_in_place_through_dotted_path_is_refused(self):
+        # ../victim.txt resolves to the same file: a plain string compare misses it.
+        d = _mkdtemp()
+        try:
+            p = self._victim(d)
+            alias = os.path.join(d, "sub", "..", "victim.txt")
+            with self.assertRaises(ValueError):
+                cp.encrypt_file(p, alias, "pw")
+            self.assertEqual(os.path.getsize(p), 1500)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_decrypt_in_place_is_refused(self):
+        d = _mkdtemp()
+        try:
+            p = self._victim(d)
+            enc = p + ".enc"
+            cp.encrypt_file(p, enc, "pw")
+            before = os.path.getsize(enc)
+            with self.assertRaises(ValueError):
+                cp.decrypt_file(enc, enc, "pw")
+            self.assertEqual(os.path.getsize(enc), before)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+class BatchSkipReportingTest(unittest.TestCase):
+    """Batch results must say what was skipped, not just what succeeded."""
+
+    def test_collect_skips_dot_enc_when_encrypting(self):
+        d = _mkdtemp()
+        try:
+            for n in ("a.txt", "b.enc", "c.jpg"):
+                with open(os.path.join(d, n), "wb") as f:
+                    f.write(b"data")
+            files, skipped = cp._collect_targets(d, None, True, for_encrypt=True)
+            self.assertEqual(sorted(os.path.basename(f) for f in files), ["a.txt", "c.jpg"])
+            self.assertEqual(sorted(os.path.basename(f) for f in skipped), ["b.enc"])
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_collect_skips_plain_when_decrypting(self):
+        d = _mkdtemp()
+        try:
+            for n in ("a.txt", "a.txt.enc", "b.enc"):
+                with open(os.path.join(d, n), "wb") as f:
+                    f.write(b"data")
+            files, skipped = cp._collect_targets(d, None, True, for_encrypt=False)
+            self.assertEqual(sorted(os.path.basename(f) for f in files),
+                             ["a.txt.enc", "b.enc"])
+            self.assertEqual(sorted(os.path.basename(f) for f in skipped), ["a.txt"])
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_pattern_miss_is_counted_as_skipped(self):
+        d = _mkdtemp()
+        try:
+            for n in ("keep.txt", "drop.md"):
+                with open(os.path.join(d, n), "wb") as f:
+                    f.write(b"data")
+            files, skipped = cp._collect_targets(d, ["*.txt"], True, for_encrypt=True)
+            self.assertEqual([os.path.basename(f) for f in files], ["keep.txt"])
+            self.assertEqual([os.path.basename(f) for f in skipped], ["drop.md"])
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_batch_result_has_skipped_key(self):
+        d = _mkdtemp()
+        try:
+            p = os.path.join(d, "x.txt")
+            with open(p, "w") as f:
+                f.write("x")
+            with open(os.path.join(d, "already.enc"), "w") as f:
+                f.write("x")
+            r = cp.batch_encrypt(d, "pw")
+            self.assertIn("skipped", r)
+            self.assertEqual(len(r["skipped"]), 1)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+class ThroughputDefaultsTest(unittest.TestCase):
+    """Large-file defaults: 1 MiB blocks and a throttled progress line."""
+
+    def test_chunk_size_is_at_least_one_mib(self):
+        # 64 KiB blocks meant 16 Python-level calls and writes per megabyte.
+        self.assertGreaterEqual(cp.CHUNK_SIZE, 1024 * 1024)
+
+    def test_progress_interval_is_positive(self):
+        self.assertGreater(cp.PROGRESS_MIN_INTERVAL, 0)
+
+
 class ConfigTest(unittest.TestCase):
     """config.json + CRYPTPOUCH_* environment variable handling."""
 
@@ -459,8 +572,8 @@ class MemoryHygieneTest(unittest.TestCase):
         cp._wipe_memory(data)  # must not raise
         self.assertEqual(data, b"0123456789")
 
-    def test_version_is_2110(self):
-        self.assertIn("Version: 2.11.0", cp.__doc__)
+    def test_version_is_2111(self):
+        self.assertIn("Version: 2.11.1", cp.__doc__)
 
 
 class AutoDecryptRetryTest(unittest.TestCase):

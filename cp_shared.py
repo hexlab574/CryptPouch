@@ -476,6 +476,10 @@ LANG = {
         "batch_encrypted_n": "加密完成：{n} 个文件",
         "batch_decrypted_n": "解密完成：{n} 个文件",
         "batch_overwrite_hint": "批量解密将覆盖同名文件，请确认后再继续。",
+        "batch_keep_source_hint": "提示：加密结果写成 .enc 副本，原文件保留；确认无误后再自行删除原文件。",
+        "batch_summary": "结果：成功 {ok} 个，失败 {failed} 个，跳过 {skipped} 个。",
+        "same_path_rejected": "输入和输出是同一个文件，已拒绝：这样会销毁原始数据。请指定不同的输出路径。",
+        "batch_dir_detected": "检测到目录，已切换为批量模式。",
     },
     "en": {
         "welcome": "Hi there! Welcome to the AES256 Crypto Toolkit ",
@@ -628,6 +632,10 @@ LANG = {
         "batch_encrypted_n": "Encrypted {n} file(s)",
         "batch_decrypted_n": "Decrypted {n} file(s)",
         "batch_overwrite_hint": "Batch decryption will overwrite files with the same name.",
+        "batch_keep_source_hint": "Note: encryption writes .enc copies and keeps the original files; delete them yourself once verified.",
+        "batch_summary": "Result: {ok} succeeded, {failed} failed, {skipped} skipped.",
+        "same_path_rejected": "Input and output are the same file; refused because it would destroy the original data. Use a different output path.",
+        "batch_dir_detected": "Directory detected; switched to batch mode.",
     }
 }
 
@@ -803,6 +811,12 @@ ARGON2_MEMORY_COST_KIB = CONFIG["argon2_memory_kib"]   # 64 MiB
 ARGON2_PARALLELISM = CONFIG["argon2_parallelism"]
 
 
+# The progress line is re-drawn at most this often (seconds). Printing once per
+# block made a 1 GB file emit ~16k console writes, which dominated the runtime
+# on Windows terminals.
+PROGRESS_MIN_INTERVAL = 0.15
+
+
 ARGON2_SALT_SIZE = 16
 
 
@@ -836,7 +850,9 @@ FALLBACK_ENCODING = "latin-1"
 HASH_ALGORITHMS = ("md5", "sha1", "sha256", "sha512", "sha3_256", "blake2b")
 
 
-CHUNK_SIZE = 65536
+# 1 MiB blocks: large enough to keep the Python loop and syscall overhead low
+# on multi-GB files, small enough to stay memory friendly on weak devices.
+CHUNK_SIZE = 1024 * 1024
 
 
 PROGRESS_THRESHOLD = 10 * 1024 * 1024

@@ -66,6 +66,32 @@ def _reject_symlink(path: str) -> None:
         pass
 
 
+def _same_file(path_a: str, path_b: str) -> bool:
+    """True when both paths resolve to the same file on this platform."""
+    try:
+        a = os.path.normcase(os.path.realpath(os.path.abspath(path_a)))
+        b = os.path.normcase(os.path.realpath(os.path.abspath(path_b)))
+    except OSError:
+        return False
+    if a == b:
+        return True
+    try:
+        return os.path.samefile(path_a, path_b)
+    except (OSError, AttributeError):
+        return False
+
+
+def _ensure_distinct_paths(input_path: str, output_path: str) -> None:
+    """Refuse in-place operation.
+
+    Opening the output for writing while the same file is still being read
+    truncates it immediately, so the payload is lost and only the header would
+    be written back: the call would return "successfully" with a 49-byte file.
+    """
+    if _same_file(input_path, output_path):
+        raise ValueError(cp_shared.i18n.t("same_path_rejected"))
+
+
 def _audit(action: str, **fields) -> None:
     """Append one JSONL audit record when audit_log is configured (best effort).
 
@@ -116,6 +142,7 @@ def encrypt_file(input_path: str, output_path: str, password: str):
 
     _reject_symlink(input_path)
     _reject_symlink(output_path)
+    _ensure_distinct_paths(input_path, output_path)
     _check_file_size(input_path)
 
     salt = get_random_bytes(cp_shared.ARGON2_SALT_SIZE)
@@ -147,6 +174,7 @@ def encrypt_file(input_path: str, output_path: str, password: str):
                 show_progress = file_size > cp_shared.PROGRESS_THRESHOLD
             f_out.write(header)
             read_size = 0
+            next_report = 0.0
             while True:
                 chunk = f_in.read(cp_shared.CHUNK_SIZE)
                 if not chunk:
@@ -154,8 +182,14 @@ def encrypt_file(input_path: str, output_path: str, password: str):
                 f_out.write(cipher.encrypt(chunk))
                 read_size += len(chunk)
                 if show_progress:
-                    percent = read_size / file_size * 100 if file_size else 100
-                    print(f"\rProgress: {percent:.1f}%", end="", flush=True)
+                    # Throttled: one console write per interval, not per block.
+                    now = time.monotonic()
+                    if now >= next_report:
+                        percent = read_size / file_size * 100 if file_size else 100
+                        print(f"\rProgress: {percent:.1f}%", end="", flush=True)
+                        next_report = now + cp_shared.PROGRESS_MIN_INTERVAL
+            if show_progress:
+                print("\rProgress: 100.0%", end="", flush=True)
             f_out.write(cipher.digest())
             # Flush and fsync so the ciphertext is durable on disk, not just in
             # the OS write-back cache, when the process returns.
@@ -183,6 +217,7 @@ def decrypt_file(input_path: str, output_path: str, password: str):
 
     _reject_symlink(input_path)
     _reject_symlink(output_path)
+    _ensure_distinct_paths(input_path, output_path)
     _check_file_size(input_path)
 
     with open(input_path, "rb") as f_in:
@@ -221,6 +256,7 @@ def decrypt_file(input_path: str, output_path: str, password: str):
                     tmp_fd = None  # ownership moved to f_out
                     remaining = data_len
                     read_size = 0
+                    next_report = 0.0
                     while remaining > 0:
                         chunk = f_in.read(min(cp_shared.CHUNK_SIZE, remaining))
                         if not chunk:
@@ -229,8 +265,13 @@ def decrypt_file(input_path: str, output_path: str, password: str):
                         read_size += len(chunk)
                         remaining -= len(chunk)
                         if show_progress:
-                            percent = read_size / data_len * 100 if data_len else 100
-                            print(f"\rProgress: {percent:.1f}%", end="", flush=True)
+                            now = time.monotonic()
+                            if now >= next_report:
+                                percent = read_size / data_len * 100 if data_len else 100
+                                print(f"\rProgress: {percent:.1f}%", end="", flush=True)
+                                next_report = now + cp_shared.PROGRESS_MIN_INTERVAL
+                    if show_progress:
+                        print("\rProgress: 100.0%", end="", flush=True)
                     tag = f_in.read(cp_shared.TAG_SIZE)
                     try:
                         cipher.verify(tag)
@@ -355,46 +396,54 @@ def reencrypt_file(input_path: str, old_password: str, new_password: str,
 
 
 def _collect_targets(input_path: str, patterns: Optional[List[str]],
-                     recursive: bool, for_encrypt: bool) -> List[str]:
+                     recursive: bool, for_encrypt: bool) -> Tuple[List[str], List[str]]:
     """Collect files to process: a single file, or a recursive directory scan
     filtered by fnmatch patterns. When encrypting, files already ending in .enc are
-    skipped; when decrypting, only .enc files are considered."""
+    skipped; when decrypting, only .enc files are considered.
+
+    Returns (matches, skipped). ``skipped`` holds paths excluded by the .enc rule
+    (or the pattern filter) so the caller can report "3 skipped" instead of the
+    user wondering where the rest of the folder went."""
     norm = cp_crypto.normalize_path(input_path)
     if os.path.isfile(norm):
-        return [norm]
+        return [norm], []
     if not os.path.isdir(norm):
         raise ValueError(cp_shared.i18n.t("file_not_exist"))
 
     matches: List[str] = []
+    skipped: List[str] = []
     for root, dirs, files in os.walk(norm):
         dirs.sort()
         for name in sorted(files):
             full = os.path.join(root, name)
             is_enc = full.lower().endswith(".enc")
             if for_encrypt and is_enc:
+                skipped.append(full)
                 continue
             if not for_encrypt and not is_enc:
+                skipped.append(full)
                 continue
             if patterns:
                 # Match the filter against the plain filename; when decrypting,
                 # strip the .enc suffix so "*.txt" matches "a.txt.enc"
                 match_name = name[:-4] if not for_encrypt and is_enc else name
                 if not any(fnmatch.fnmatch(match_name, pat) for pat in patterns):
+                    skipped.append(full)
                     continue
             matches.append(full)
         if not recursive:
             break
-    return matches
+    return matches, skipped
 
 
 def batch_encrypt(path: str, password: str, pattern: Optional[str] = None,
                   recursive: bool = True) -> dict:
     """Encrypt every collected file in place as <file>.enc.
 
-    Returns {"encrypted": [output paths], "failed": [(path, error)]}."""
+    Returns {"encrypted": [...], "failed": [(path, error)], "skipped": [...]}."""
     cp_utils._validate_password_len(password)
     patterns = [p.strip() for p in pattern.split(",") if p.strip()] if pattern else None
-    files = _collect_targets(path, patterns, recursive, for_encrypt=True)
+    files, skipped = _collect_targets(path, patterns, recursive, for_encrypt=True)
     encrypted, failed = [], []
     for f in files:
         try:
@@ -403,7 +452,7 @@ def batch_encrypt(path: str, password: str, pattern: Optional[str] = None,
             encrypted.append(out)
         except Exception as e:
             failed.append((f, str(e)))
-    return {"encrypted": encrypted, "failed": failed}
+    return {"encrypted": encrypted, "failed": failed, "skipped": skipped}
 
 
 def batch_decrypt(path: str, password: str, pattern: Optional[str] = None,
@@ -411,10 +460,10 @@ def batch_decrypt(path: str, password: str, pattern: Optional[str] = None,
     """Decrypt every collected .enc file in place (strips the .enc suffix).
 
     Note: an existing file with the target name is overwritten (batch restore).
-    Returns {"decrypted": [output paths], "failed": [(path, error)]}."""
+    Returns {"decrypted": [...], "failed": [(path, error)], "skipped": [...]}."""
     cp_utils._validate_password_len(password)
     patterns = [p.strip() for p in pattern.split(",") if p.strip()] if pattern else None
-    files = _collect_targets(path, patterns, recursive, for_encrypt=False)
+    files, skipped = _collect_targets(path, patterns, recursive, for_encrypt=False)
     decrypted, failed = [], []
     for f in files:
         try:
@@ -423,7 +472,7 @@ def batch_decrypt(path: str, password: str, pattern: Optional[str] = None,
             decrypted.append(out)
         except Exception as e:
             failed.append((f, str(e)))
-    return {"decrypted": decrypted, "failed": failed}
+    return {"decrypted": decrypted, "failed": failed, "skipped": skipped}
 
 
 def detect_content_type(text: str) -> Tuple[str, Optional[str], Optional[str]]:

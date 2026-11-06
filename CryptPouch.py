@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""CryptPouch v2.11.0 - AES256 encryption toolbox (interactive menu + CLI).
-Version: 2.11.0
+"""CryptPouch v2.11.1 - AES256 encryption toolbox (interactive menu + CLI).
+Version: 2.11.1
 License: MIT
 Note: For learning, research and personal local use only.
 
@@ -218,16 +218,56 @@ def menu_loop():
 
             elif choice == "15":
                 input_path = cp_crypto.normalize_path(cp_utils._safe_input(cp_shared.i18n.t("file_path")))
+                if os.path.isdir(input_path):
+                    # Accept a folder here too: no need to remember menu 24.
+                    cp_shared.printer.warn(cp_shared.i18n.t("batch_dir_detected"))
+                    pwd = cp_utils.get_password_with_confirm("encrypt_pwd")
+                    try:
+                        result = cp_files.batch_encrypt(input_path, pwd)
+                        cp_shared.printer.ok(cp_shared.i18n.t("batch_encrypted_n", n=len(result["encrypted"])))
+                        print(cp_shared.i18n.t("batch_summary", ok=len(result["encrypted"]),
+                                               failed=len(result["failed"]),
+                                               skipped=len(result.get("skipped", []))))
+                        if result["encrypted"]:
+                            cp_shared.printer.warn(cp_shared.i18n.t("batch_keep_source_hint"))
+                        for path, err in result["failed"]:
+                            cp_shared.printer.fail(f"{path}: {err}")
+                    except (cp_shared.CryptoToolError, ValueError, OSError, UnicodeError) as e:
+                        cp_shared.printer.fail(str(e))
+                    except Exception as e:
+                        cp_utils._handle_unexpected_error(e)
+                    continue
                 if not os.path.isfile(input_path):
                     cp_shared.printer.fail(cp_shared.i18n.t("file_not_exist"))
                     continue
                 pwd = cp_utils.get_password_with_confirm("encrypt_pwd")
                 output_path = input_path + ".enc"
-                cp_files.encrypt_file(input_path, output_path, pwd)
-                cp_shared.printer.ok(cp_shared.i18n.t("file_encrypted_to", path=output_path))
+                try:
+                    cp_files.encrypt_file(input_path, output_path, pwd)
+                    cp_shared.printer.ok(cp_shared.i18n.t("file_encrypted_to", path=output_path))
+                except (cp_shared.CryptoToolError, ValueError, OSError, UnicodeError) as e:
+                    cp_shared.printer.fail(str(e))
+                except Exception as e:
+                    cp_utils._handle_unexpected_error(e)
 
             elif choice == "16":
                 input_path = cp_crypto.normalize_path(cp_utils._safe_input(cp_shared.i18n.t("file_path")))
+                if os.path.isdir(input_path):
+                    cp_shared.printer.warn(cp_shared.i18n.t("batch_dir_detected"))
+                    pwd = getpass.getpass(cp_shared.i18n.t("decrypt_pwd"))
+                    try:
+                        result = cp_files.batch_decrypt(input_path, pwd)
+                        cp_shared.printer.ok(cp_shared.i18n.t("batch_decrypted_n", n=len(result["decrypted"])))
+                        print(cp_shared.i18n.t("batch_summary", ok=len(result["decrypted"]),
+                                               failed=len(result["failed"]),
+                                               skipped=len(result.get("skipped", []))))
+                        for path, err in result["failed"]:
+                            cp_shared.printer.fail(f"{path}: {err}")
+                    except (cp_shared.CryptoToolError, ValueError, OSError, UnicodeError) as e:
+                        cp_shared.printer.fail(str(e))
+                    except Exception as e:
+                        cp_utils._handle_unexpected_error(e)
+                    continue
                 if not os.path.isfile(input_path):
                     cp_shared.printer.fail(cp_shared.i18n.t("file_not_exist"))
                     continue
@@ -354,6 +394,11 @@ def menu_loop():
                 try:
                     result = cp_files.batch_encrypt(target, pwd, pattern or None)
                     cp_shared.printer.ok(cp_shared.i18n.t("batch_encrypted_n", n=len(result["encrypted"])))
+                    print(cp_shared.i18n.t("batch_summary", ok=len(result["encrypted"]),
+                                           failed=len(result["failed"]),
+                                           skipped=len(result.get("skipped", []))))
+                    if result["encrypted"]:
+                        cp_shared.printer.warn(cp_shared.i18n.t("batch_keep_source_hint"))
                     for path, err in result["failed"]:
                         cp_shared.printer.fail(f"{path}: {err}")
                 except (cp_shared.CryptoToolError, ValueError, OSError, UnicodeError) as e:
@@ -369,6 +414,9 @@ def menu_loop():
                 try:
                     result = cp_files.batch_decrypt(target, pwd, pattern or None)
                     cp_shared.printer.ok(cp_shared.i18n.t("batch_decrypted_n", n=len(result["decrypted"])))
+                    print(cp_shared.i18n.t("batch_summary", ok=len(result["decrypted"]),
+                                           failed=len(result["failed"]),
+                                           skipped=len(result.get("skipped", []))))
                     for path, err in result["failed"]:
                         cp_shared.printer.fail(f"{path}: {err}")
                 except (cp_shared.CryptoToolError, ValueError, OSError, UnicodeError) as e:
@@ -422,7 +470,7 @@ def cli_mode():
     parser.add_argument("--hash", help=i18n.t("cli_hash_help"))
     parser.add_argument("--cipher", choices=list(cp_shared.CIPHER_MODES), default="gcm", help=i18n.t("cli_cipher_help"))
     parser.add_argument("--lang", choices=["zh", "en"], default=cp_shared.CONFIG.get("lang") or "zh", help=i18n.t("cli_lang_help"))
-    parser.add_argument("--version", action="version", version="2.11.0")
+    parser.add_argument("--version", action="version", version="2.11.1")
 
     args = parser.parse_args()
 
@@ -476,6 +524,30 @@ def cli_mode():
         target = args.encrypt or args.decrypt
 
         try:
+            norm_target = cp_crypto.normalize_path(target)
+            if args.file and os.path.isdir(norm_target):
+                # A folder passed with -f used to be rejected outright, which made
+                # whole file classes look unsupported. Process the tree instead.
+                if args.encrypt:
+                    res = cp_files.batch_encrypt(norm_target, pwd)
+                    printer.ok(i18n.t("batch_encrypted_n", n=len(res["encrypted"])))
+                    print(i18n.t("batch_summary", ok=len(res["encrypted"]),
+                                 failed=len(res["failed"]),
+                                 skipped=len(res.get("skipped", []))))
+                    if res["encrypted"]:
+                        printer.warn(i18n.t("batch_keep_source_hint"))
+                    for path, err in res["failed"]:
+                        printer.fail(f"{path}: {err}")
+                    sys.exit(1 if res["failed"] else 0)
+                else:
+                    res = cp_files.batch_decrypt(norm_target, pwd)
+                    printer.ok(i18n.t("batch_decrypted_n", n=len(res["decrypted"])))
+                    print(i18n.t("batch_summary", ok=len(res["decrypted"]),
+                                 failed=len(res["failed"]),
+                                 skipped=len(res.get("skipped", []))))
+                    for path, err in res["failed"]:
+                        printer.fail(f"{path}: {err}")
+                    sys.exit(1 if res["failed"] else 0)
             if args.file:
                 if args.encrypt:
                     out = args.output or target + ".enc"
@@ -487,8 +559,11 @@ def cli_mode():
                     else:
                         out = cp_files.get_decrypt_output_path(target)
                         if os.path.exists(out):
-                            printer.fail(i18n.t("cli_output_exists"))
-                            return
+                            # Never overwrite silently: pick the next free
+                            # "name (1).txt" and say so. Failing here made a
+                            # perfectly good .enc file look undecryptable.
+                            out = cp_files.next_available_copy_name(out)
+                            printer.warn(i18n.t("kept_original") + " " + out)
                     cp_files.decrypt_file(target, out, pwd)
                     printer.ok(i18n.t("cli_file_decrypted", path=out))
             else:
@@ -497,7 +572,10 @@ def cli_mode():
                 else:
                     print(cp_files.try_text_decrypt(target, pwd))
         except Exception as e:
+            # A non-zero status is what scripts and CI actually read; printing
+            # the error and returning 0 made failures look like successes.
             printer.fail(str(e))
+            sys.exit(1)
         return
 
 

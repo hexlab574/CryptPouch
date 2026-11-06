@@ -8,7 +8,7 @@ the known security considerations of the project.
 
 The following version series currently receive security support:
 
-- 2.11.x  -  actively supported (latest: 2.11.0)
+- 2.11.x  -  actively supported (latest: 2.11.1)
 - 2.10.x  -  supported (latest: 2.10.2)
 - 2.9.x  -  supported (latest: 2.9.0)
 - 2.8.x  -  supported (latest: 2.8.0)
@@ -64,6 +64,11 @@ CryptPouch has undergone six rounds of security review between versions
 count from 23 to 14. Rounds 4, 5 and 6 are hardening additions (six, six and
 seven items respectively, worded as "added" below): they strengthen the product
 rather than fix known vulnerabilities, so the defect count is unchanged at 14.
+
+v2.11.1 is a data-integrity release, not another security round: it refuses
+in-place encrypt/decrypt (output resolving to the input file), which previously
+truncated the payload and returned success, and makes CLI failures exit non-zero.
+Neither changes the security posture above.
 
 All reviews to date are author self-review. There is no third-party or paid
 security audit, and community validation is still limited; treat the
