@@ -9,6 +9,7 @@ cp_shared / cp_crypto / cp_utils / cp_files / cp_admin. All public symbols are
 re-exported here so existing imports (cryptpouch_api, tests) keep working."""
 import argparse
 import getpass
+import importlib.util
 import os
 import sys
 import time
@@ -541,6 +542,12 @@ def main():
     try:
         menu_loop()
     except KeyboardInterrupt:
+        print()
+        printer.info(i18n.t("bye"))
+        sys.exit(0)
+    except EOFError:
+        # Input stream ended (piped / non-interactive): exit cleanly instead of
+        # crashing with a traceback.
         print()
         printer.info(i18n.t("bye"))
         sys.exit(0)
