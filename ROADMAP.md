@@ -1,5 +1,15 @@
 # CryptPouch Roadmap
 
+## Released: v2.11.2 (2026-11, batch overwrite reporting)
+
+| # | Item | Details |
+| --- | --- | --- |
+| 1 | Existing ciphertext kept | Batch encrypt rewrote `<file>.enc` in place. On a folder where every plaintext already had a ciphertext, one run printed "2999 succeeded, 2999 skipped" while the folder kept exactly the same names and the same number of .enc files, which reads as "no output was produced". An existing ciphertext is now kept and reported separately ("N already had a .enc file"); `--overwrite` re-encrypts on request. |
+| 2 | Repeat runs are idempotent | A second batch run over an already encrypted tree now encrypts nothing and says so, instead of silently replacing every ciphertext. |
+| 3 | Single-file overwrite confirmed | Menu entry 15 and CLI `-e` without `-o` ask before replacing an existing ciphertext (CLI keeps it and warns unless `--overwrite` is given). |
+
+Covered by 3 new tests (101 total).
+
 ## Released: v2.11.1 (2026-11, throughput and data-loss fixes)
 
 Three user-reported problems, each reproduced before the fix. The four

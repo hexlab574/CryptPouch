@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for the AI-friendly wrapper cryptpouch_api.py (v2.11.1).
+"""Regression tests for the AI-friendly wrapper cryptpouch_api.py (v2.11.2).
 
 Run: python -m unittest discover -s tests -v
 """
@@ -134,7 +134,7 @@ class ApiMiscTest(unittest.TestCase):
         self.assertEqual(cfg["rsa_bits"], 2048)
 
     def test_version(self):
-        self.assertEqual(api.__version__, "2.11.1")
+        self.assertEqual(api.__version__, "2.11.2")
 
 
 if __name__ == "__main__":

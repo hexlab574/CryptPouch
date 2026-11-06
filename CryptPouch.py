@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""CryptPouch v2.11.1 - AES256 encryption toolbox (interactive menu + CLI).
-Version: 2.11.1
+"""CryptPouch v2.11.2 - AES256 encryption toolbox (interactive menu + CLI).
+Version: 2.11.2
 License: MIT
 Note: For learning, research and personal local use only.
 
@@ -68,6 +68,24 @@ def show_menu():
     print("24. 批量加密（目录/文件）" if cp_shared.i18n.lang == "zh" else "24. Batch Encrypt (dir/file)")
     print("25. 批量解密（目录/文件）" if cp_shared.i18n.lang == "zh" else "25. Batch Decrypt (dir/file)")
     print("0. 退出" if cp_shared.i18n.lang == "zh" else "0. Exit")
+
+
+def _ask_overwrite(path, action="encrypt"):
+    """Ask once before a batch encrypt that would replace existing ciphertext.
+
+    Returns True only when the user explicitly says yes; every other outcome
+    keeps the old files untouched."""
+    if action != "encrypt":
+        return False
+    try:
+        files, _ = cp_files._collect_targets(path, None, True, for_encrypt=True)
+    except Exception:
+        return False
+    n = sum(1 for f in files if os.path.exists(f + ".enc"))
+    if not n:
+        return False
+    cp_shared.printer.warn(cp_shared.i18n.t("batch_existing_n", n=n))
+    return cp_utils._safe_input(cp_shared.i18n.t("overwrite_confirm")).strip().lower() == "y"
 
 
 def menu_loop():
@@ -223,11 +241,13 @@ def menu_loop():
                     cp_shared.printer.warn(cp_shared.i18n.t("batch_dir_detected"))
                     pwd = cp_utils.get_password_with_confirm("encrypt_pwd")
                     try:
-                        result = cp_files.batch_encrypt(input_path, pwd)
+                        result = cp_files.batch_encrypt(input_path, pwd, overwrite=_ask_overwrite(input_path, "encrypt"))
                         cp_shared.printer.ok(cp_shared.i18n.t("batch_encrypted_n", n=len(result["encrypted"])))
                         print(cp_shared.i18n.t("batch_summary", ok=len(result["encrypted"]),
                                                failed=len(result["failed"]),
                                                skipped=len(result.get("skipped", []))))
+                        if result.get("existing"):
+                            print(cp_shared.i18n.t("batch_existing_kept", n=len(result["existing"])))
                         if result["encrypted"]:
                             cp_shared.printer.warn(cp_shared.i18n.t("batch_keep_source_hint"))
                         for path, err in result["failed"]:
@@ -242,6 +262,13 @@ def menu_loop():
                     continue
                 pwd = cp_utils.get_password_with_confirm("encrypt_pwd")
                 output_path = input_path + ".enc"
+                if os.path.exists(output_path):
+                    # Re-encrypting in place kept the same name, so the folder looked
+                    # untouched even though the old ciphertext had been replaced.
+                    ans = cp_utils._safe_input(cp_shared.i18n.t("overwrite_confirm")).strip().lower()
+                    if ans != "y":
+                        cp_shared.printer.warn(cp_shared.i18n.t("encrypt_exists_skip") + " " + output_path)
+                        continue
                 try:
                     cp_files.encrypt_file(input_path, output_path, pwd)
                     cp_shared.printer.ok(cp_shared.i18n.t("file_encrypted_to", path=output_path))
@@ -392,11 +419,14 @@ def menu_loop():
                 pattern = cp_utils._safe_input(cp_shared.i18n.t("batch_pattern_prompt")).strip()
                 pwd = cp_utils.get_password_with_confirm("encrypt_pwd")
                 try:
-                    result = cp_files.batch_encrypt(target, pwd, pattern or None)
+                    result = cp_files.batch_encrypt(target, pwd, pattern or None,
+                                                    overwrite=_ask_overwrite(target, "encrypt"))
                     cp_shared.printer.ok(cp_shared.i18n.t("batch_encrypted_n", n=len(result["encrypted"])))
                     print(cp_shared.i18n.t("batch_summary", ok=len(result["encrypted"]),
                                            failed=len(result["failed"]),
                                            skipped=len(result.get("skipped", []))))
+                    if result.get("existing"):
+                        print(cp_shared.i18n.t("batch_existing_kept", n=len(result["existing"])))
                     if result["encrypted"]:
                         cp_shared.printer.warn(cp_shared.i18n.t("batch_keep_source_hint"))
                     for path, err in result["failed"]:
@@ -467,10 +497,11 @@ def cli_mode():
     parser.add_argument("--password-file", help=i18n.t("cli_password_file_help"))
     parser.add_argument("-f", "--file", action="store_true", help=i18n.t("cli_f_help"))
     parser.add_argument("-o", "--output", help=i18n.t("cli_o_help"))
+    parser.add_argument("--overwrite", action="store_true", help=i18n.t("cli_overwrite_help"))
     parser.add_argument("--hash", help=i18n.t("cli_hash_help"))
     parser.add_argument("--cipher", choices=list(cp_shared.CIPHER_MODES), default="gcm", help=i18n.t("cli_cipher_help"))
     parser.add_argument("--lang", choices=["zh", "en"], default=cp_shared.CONFIG.get("lang") or "zh", help=i18n.t("cli_lang_help"))
-    parser.add_argument("--version", action="version", version="2.11.1")
+    parser.add_argument("--version", action="version", version="2.11.2")
 
     args = parser.parse_args()
 
@@ -529,11 +560,13 @@ def cli_mode():
                 # A folder passed with -f used to be rejected outright, which made
                 # whole file classes look unsupported. Process the tree instead.
                 if args.encrypt:
-                    res = cp_files.batch_encrypt(norm_target, pwd)
+                    res = cp_files.batch_encrypt(norm_target, pwd, overwrite=args.overwrite)
                     printer.ok(i18n.t("batch_encrypted_n", n=len(res["encrypted"])))
                     print(i18n.t("batch_summary", ok=len(res["encrypted"]),
                                  failed=len(res["failed"]),
                                  skipped=len(res.get("skipped", []))))
+                    if res.get("existing"):
+                        print(i18n.t("batch_existing_kept", n=len(res["existing"])))
                     if res["encrypted"]:
                         printer.warn(i18n.t("batch_keep_source_hint"))
                     for path, err in res["failed"]:
@@ -551,8 +584,13 @@ def cli_mode():
             if args.file:
                 if args.encrypt:
                     out = args.output or target + ".enc"
-                    cp_files.encrypt_file(target, out, pwd)
-                    printer.ok(i18n.t("cli_file_encrypted"))
+                    if (not args.output and not args.overwrite and os.path.exists(out)):
+                        # Re-encrypting over the old ciphertext kept the same file
+                        # name, so the folder looked unchanged after a real run.
+                        printer.warn(i18n.t("encrypt_exists_skip") + " " + out)
+                    else:
+                        cp_files.encrypt_file(target, out, pwd)
+                        printer.ok(i18n.t("cli_file_encrypted"))
                 else:
                     if args.output:
                         out = args.output

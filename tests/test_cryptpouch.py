@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for CryptPouch v2.11.1.
+"""Unit tests for CryptPouch v2.11.2.
 
 Run from the CryptPouch package directory:
     python -m unittest discover -s tests -v
@@ -488,6 +488,56 @@ class BatchSkipReportingTest(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class BatchOverwriteTest(unittest.TestCase):
+    """Regression: batch encrypt used to replace <file>.enc in place, so a run
+    that really encrypted thousands of files left the folder with the same
+    names and the same count -- it looked like nothing had been produced."""
+
+    def _tree(self, d, names=("a.txt", "b.txt")):
+        for n in names:
+            with open(os.path.join(d, n), "w", encoding="utf-8") as f:
+                f.write("plain " + n)
+            with open(os.path.join(d, n + ".enc"), "w", encoding="utf-8") as f:
+                f.write("OLD-STALE-CIPHER")
+        return d
+
+    def test_existing_ciphertext_is_kept_by_default(self):
+        d = _mkdtemp()
+        try:
+            self._tree(d)
+            r = cp.batch_encrypt(d, "pw")
+            self.assertEqual(len(r["encrypted"]), 0)
+            self.assertEqual(len(r["existing"]), 2)
+            for n in ("a.txt", "b.txt"):
+                with open(os.path.join(d, n + ".enc"), "rb") as f:
+                    self.assertEqual(f.read(), b"OLD-STALE-CIPHER")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_overwrite_replaces_ciphertext(self):
+        d = _mkdtemp()
+        try:
+            self._tree(d, names=("a.txt",))
+            r = cp.batch_encrypt(d, "pw", overwrite=True)
+            self.assertEqual(len(r["encrypted"]), 1)
+            self.assertEqual(len(r["existing"]), 0)
+            with open(os.path.join(d, "a.txt.enc"), "rb") as f:
+                self.assertTrue(f.read(5) == cp.PREFIX_AES_V4)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_second_default_run_changes_nothing(self):
+        d = _mkdtemp()
+        try:
+            self._tree(d, names=("a.txt",))
+            cp.batch_encrypt(d, "pw")
+            again = cp.batch_encrypt(d, "pw")
+            self.assertEqual(len(again["encrypted"]), 0)
+            self.assertEqual(len(again["existing"]), 1)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 class ThroughputDefaultsTest(unittest.TestCase):
     """Large-file defaults: 1 MiB blocks and a throttled progress line."""
 
@@ -572,8 +622,8 @@ class MemoryHygieneTest(unittest.TestCase):
         cp._wipe_memory(data)  # must not raise
         self.assertEqual(data, b"0123456789")
 
-    def test_version_is_2111(self):
-        self.assertIn("Version: 2.11.1", cp.__doc__)
+    def test_version_is_2112(self):
+        self.assertIn("Version: 2.11.2", cp.__doc__)
 
 
 class AutoDecryptRetryTest(unittest.TestCase):

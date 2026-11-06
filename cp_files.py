@@ -437,22 +437,32 @@ def _collect_targets(input_path: str, patterns: Optional[List[str]],
 
 
 def batch_encrypt(path: str, password: str, pattern: Optional[str] = None,
-                  recursive: bool = True) -> dict:
+                  recursive: bool = True, overwrite: bool = False) -> dict:
     """Encrypt every collected file in place as <file>.enc.
 
-    Returns {"encrypted": [...], "failed": [(path, error)], "skipped": [...]}."""
+    An existing <file>.enc is kept by default and reported under "existing":
+    silently re-encrypting it left the folder with the same file names as before,
+    so a run that did real work looked like it had produced nothing. Pass
+    overwrite=True (CLI: --overwrite) to replace the old ciphertext.
+
+    Returns {"encrypted": [...], "failed": [(path, error)], "skipped": [...],
+    "existing": [...]}."""
     cp_utils._validate_password_len(password)
     patterns = [p.strip() for p in pattern.split(",") if p.strip()] if pattern else None
     files, skipped = _collect_targets(path, patterns, recursive, for_encrypt=True)
-    encrypted, failed = [], []
+    encrypted, failed, existing = [], [], []
     for f in files:
+        out = f + ".enc"
+        if os.path.exists(out) and not overwrite:
+            existing.append(out)
+            continue
         try:
-            out = f + ".enc"
             encrypt_file(f, out, password)
             encrypted.append(out)
         except Exception as e:
             failed.append((f, str(e)))
-    return {"encrypted": encrypted, "failed": failed, "skipped": skipped}
+    return {"encrypted": encrypted, "failed": failed, "skipped": skipped,
+            "existing": existing}
 
 
 def batch_decrypt(path: str, password: str, pattern: Optional[str] = None,

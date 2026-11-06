@@ -1,6 +1,6 @@
 # CryptPouch
 
-AES-256 encryption toolbox for local, single-user use. Version 2.11.1.
+AES-256 encryption toolbox for local, single-user use. Version 2.11.2.
 
 Interactive menu and command-line interface, with Chinese and English prompts.
 
@@ -32,6 +32,9 @@ Interactive menu and command-line interface, with Chinese and English prompts.
   so scripts no longer read a failed run as a success
 - Directories accepted in the single-file menu entries and in `-f`, so any file
   type or whole folder tree can be processed without switching menus
+- Batch runs never rewrite an existing ciphertext (v2.11.2): it is kept and
+  counted as "already had a .enc file", which makes repeat runs idempotent;
+  pass `--overwrite` to replace it deliberately
 - Configurable file size cap (`max_file_size`) to protect against accidental processing of huge files (0 = no limit)
 - Atomic decryption output: plaintext is written to a temp file and swapped in only after the tag verifies
 - RSA asymmetric encryption, 2048/3072/4096-bit keys, optional passphrase-protected private key
