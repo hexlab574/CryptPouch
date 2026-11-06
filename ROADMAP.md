@@ -1,5 +1,14 @@
 # CryptPouch Roadmap
 
+## Released: v2.10.1 (2026-11, patch)
+
+Bug fix release:
+
+| # | Fix | Details |
+| --- | --- | --- |
+| 1 | Startup crash | The modular split lost the top-level `import importlib.util`, so the menu crashed with `AttributeError: module 'importlib' has no attribute 'util'` on the first screen. The import is restored (and the split tooling now maps dotted imports correctly so a future re-split cannot regress). |
+| 2 | EOF handling | A closed/redirected input stream now exits cleanly with the goodbye message instead of raising `EOFError`. |
+
 ## Released: v2.10.0 (2026-11)
 
 Implemented in this release:
