@@ -1,0 +1,24 @@
+# CryptPouch optional pinned dependency set (v2.11.0).
+#
+# Purpose: reproducible installs for users who want exact versions instead of
+# the lower-bound policy kept in requirements.txt. Installing this file is
+# optional and does not change the default install path.
+#
+#   python -m pip install -r requirements-lock.txt
+#
+# Versions below were recorded from a working installation on 2026-11-06.
+# Only the runtime-verified subset is pinned exactly; optional extras keep the
+# versions declared in requirements.txt because they are not installed on
+# every platform (pyzbar needs native zbar libraries, qrcode/Pillow are only
+# needed for the QR features, pyperclip only for clipboard support).
+
+pycryptodome==4.2.0
+argon2-cffi==25.1.0
+cffi==2.1.1
+pycparser==3.12
+
+# Optional extras (uncomment the ones you need):
+# qrcode==7.4.2
+# Pillow==10.0.0
+# pyzbar==0.1.9
+# pyperclip==1.8.2

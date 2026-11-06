@@ -8,7 +8,8 @@ the known security considerations of the project.
 
 The following version series currently receive security support:
 
-- 2.10.x  -  actively supported (latest: 2.10.2)
+- 2.11.x  -  actively supported (latest: 2.11.0)
+- 2.10.x  -  supported (latest: 2.10.2)
 - 2.9.x  -  supported (latest: 2.9.0)
 - 2.8.x  -  supported (latest: 2.8.0)
 - 2.7.x  -  supported for migration only; users are encouraged to upgrade
@@ -58,11 +59,11 @@ disclosure where appropriate.
 
 ## Security Audit History
 
-CryptPouch has undergone five rounds of security review between versions
-2.6.1 and 2.10.0. Rounds 1 to 3 were defect fixes and reduced the defect
-count from 23 to 14. Rounds 4 and 5 are hardening additions (six items each,
-worded as "added" below): they strengthen the product rather than fix known
-vulnerabilities, so the defect count is unchanged at 14.
+CryptPouch has undergone six rounds of security review between versions
+2.6.1 and 2.11.0. Rounds 1 to 3 were defect fixes and reduced the defect
+count from 23 to 14. Rounds 4, 5 and 6 are hardening additions (six, six and
+seven items respectively, worded as "added" below): they strengthen the product
+rather than fix known vulnerabilities, so the defect count is unchanged at 14.
 
 All reviews to date are author self-review. There is no third-party or paid
 security audit, and community validation is still limited; treat the
@@ -148,6 +149,37 @@ Round 5 (2.9.0 to 2.10.0) added 6 items:
   --password=... so a command-line password is never re-exposed to a child
   process.
 
+Round 6 (2.10.2 to 2.11.0) added 7 items:
+
+- authenticated ciphertext headers: the new $CP4$ (AES-256-GCM), $CC2$
+  (ChaCha20-Poly1305) and $AC3$ (AES-CBC + HMAC) formats feed prefix + salt +
+  nonce (or IV) to the AEAD or MAC as associated data. Editing the header, or
+  swapping a prefix to force a different algorithm, now fails authentication
+  instead of merely producing undecryptable or garbled output. The previous
+  $CP3$ / $CC1$ / $AC2$ formats remain readable, print a one-time notice and
+  upgrade to the new format through reencrypt or the next re-encrypt;
+- symlink rejection (reject_symlinks, default enabled): file encrypt and decrypt
+  refuse a symlinked input or output path, so a link cannot silently redirect an
+  operation to an unintended target;
+- open-handle size recheck: the max_file_size cap is evaluated again on the
+  os.fstat of the already-open handle, closing the stat-then-open window that
+  allowed a file to grow between the check and the read;
+- legacy decryption switch (allow_legacy_decrypt, default enabled for
+  compatibility): when disabled, every older-prefix and prefixless legacy path
+  is refused with an explicit error, so an operator who only needs new-format
+  ciphertext can turn the compatibility surface off entirely;
+- optional audit log (audit_log, default off): when a path is configured, each
+  file encrypt/decrypt appends one JSONL record with event, path, timestamp and
+  outcome. Passwords, plaintext and key material are never written, and audit
+  failures never abort the operation;
+- configurable artifact directory (artifact_dir, default empty = script
+  directory): RSA key pairs and QR images can be written outside the code
+  directory, so running from a read-only or shared folder no longer forces
+  secrets to land next to the scripts;
+- optional pinned dependency file: requirements-lock.txt pins the exact versions
+  of the runtime-verified packages for reproducible installs, while
+  requirements.txt keeps the lower-bound policy as the default.
+
 ## Known Security Considerations
 
 The following items are accepted risks, deliberately chosen for a local
@@ -195,21 +227,29 @@ TOCTOU race in file naming
   name.
 - Residual risk: between the existence check in (a) and the os.replace in (b)
   a concurrent writer could still win the race; accepted for the single-user
-  local model.
+  local model. Additional hardening since v2.11.0 narrows the window further:
+  symlinked inputs are refused by default, and the size cap is re-evaluated on
+  the fstat of the already-open handle rather than on a path lookup.
 
 RSA keys and QR images written next to the script
 
 - Reason: these are user-visible artifacts that must be kept; not temporary
-  files.
-- Mitigation: this also avoids permission errors under store versions of
-  Python with read-only working directories.
+  files, and writing them beside the script keeps the default layout
+  predictable.
+- Mitigation: since v2.11.0 the output directory is configurable through
+  artifact_dir (or CRYPTPOUCH_ARTIFACT_DIR), so keys and images can be kept
+  outside a read-only or shared code directory. The default stays the script
+  directory for backward compatibility.
 
 Dependency version pinning and audit logging
 
-- Reason: pinning inside the script may cause install failures; logging is
-  better delivered as companion documentation.
-- Mitigation: startup detects missing core dependencies and guides the user
-  through installation.
+- Reason: hard-pinning inside the installed package can cause install failures
+  on platforms without matching wheels, and log volume is operator-specific.
+- Mitigation: requirements.txt keeps the lower-bound policy as the default,
+  while the optional requirements-lock.txt pins exact versions for reproducible
+  installs; an optional JSONL audit log can be enabled through audit_log when
+  an operation trail is required. Startup still detects missing core
+  dependencies and guides the user through installation.
 
 ## Recommended Practices
 
@@ -217,7 +257,8 @@ For deployments that need a stricter posture, consider:
 
 - integrating static analysis (bandit or safegrep) into CI;
 - optionally shipping a rockyou.txt subset for extended weak-password checks;
-- publishing requirements.txt with pinned dependency versions;
+- installing from requirements-lock.txt when reproducible versions are required;
+- enabling audit_log when an operation trail is needed;
 - tightening the accepted items above (directory whitelist, disabling -p, or
   disabling legacy compatibility) when moving to a multi-user or controlled
   environment.

@@ -177,6 +177,12 @@ def load_config(config_path: Optional[str] = None) -> dict:
         cfg["argon2_memory_kib"] = max(8 * 1024, int(cfg["argon2_memory_kib"]))
     except (TypeError, ValueError):
         cfg["argon2_memory_kib"] = DEFAULT_CONFIG["argon2_memory_kib"]
+    for key in ("allow_legacy_decrypt", "reject_symlinks"):
+        if not isinstance(cfg[key], bool):
+            cfg[key] = DEFAULT_CONFIG[key]
+    for key in ("audit_log", "artifact_dir"):
+        if not isinstance(cfg[key], str) or "\x00" in cfg[key]:
+            cfg[key] = DEFAULT_CONFIG[key]
     return cfg
 
 
@@ -214,6 +220,12 @@ def _validate_config_values(updates: dict) -> dict:
                 raise ValueError(i18n.t("cfg_invalid_value", k=key, v=value))
             out[key] = ivalue
             continue
+        elif key in ("allow_legacy_decrypt", "reject_symlinks"):
+            if not isinstance(value, bool):
+                raise ValueError(i18n.t("cfg_invalid_value", k=key, v=value))
+        elif key in ("audit_log", "artifact_dir"):
+            if not isinstance(value, str) or "\x00" in value:
+                raise ValueError(i18n.t("cfg_invalid_value", k=key, v=value))
         else:
             # numeric keys: iterations, argon2_*, qr_max_len, password_max_len,
             # score_*, keyboard_pattern_min_len
@@ -228,6 +240,15 @@ def _validate_config_values(updates: dict) -> dict:
             continue
         out[key] = value
     return out
+
+
+def get_artifact_dir() -> str:
+    """Directory for RSA keys and QR images: the configured artifact_dir when set,
+    otherwise the script directory (the historical behavior)."""
+    configured = (CONFIG.get("artifact_dir") or "").strip()
+    if configured:
+        return os.path.abspath(os.path.expanduser(configured))
+    return SCRIPT_DIR
 
 
 def _refresh_derived_constants() -> None:
@@ -340,6 +361,10 @@ LANG = {
         "elevate_ok": "依赖已以管理员权限安装。",
         "elevate_continue": "安装完成后请按回车键继续，程序将自动重启。",
         "install_denied": "安装失败：权限不足。可尝试以管理员权限重试。",
+        "symlink_rejected": "出于安全考虑，已拒绝符号链接路径：{path}",
+        "file_changed": "文件在检查后发生了变化，已中止本次操作：{path}",
+        "legacy_decrypt_disabled": "已禁用 legacy（v2/无前缀 CBC）解密路径。如需解密旧密文，请设置 allow_legacy_decrypt=true。",
+        "format_legacy_upgrade": "该密文使用旧版格式（密文头未被认证），建议用 reencrypt 升级到 $CP4$ / $CC2$ / $AC3$。",
         "decrypt_pwd": "请输入解密密码：",
         "input_plain": "请输入明文：",
         "input_cipher": "请输入密文：",
@@ -488,6 +513,10 @@ LANG = {
         "elevate_ok": "Dependencies installed with administrator rights.",
         "elevate_continue": "Press Enter after the installation finishes; the app will restart.",
         "install_denied": "Install failed: permission denied. Try again as administrator.",
+        "symlink_rejected": "Refusing a symbolic link path for security reasons: {path}",
+        "file_changed": "The file changed after it was checked; operation aborted: {path}",
+        "legacy_decrypt_disabled": "Legacy (v2 / prefixless CBC) decryption is disabled. Set allow_legacy_decrypt=true to decrypt old ciphertext.",
+        "format_legacy_upgrade": "This ciphertext uses an older format (authenticated header missing). Re-encrypt it to $CP4$ / $CC2$ / $AC3$ with reencrypt.",
         "decrypt_pwd": "Enter decryption password:",
         "input_plain": "Enter plaintext:",
         "input_cipher": "Enter ciphertext:",
@@ -652,6 +681,10 @@ DEFAULT_CONFIG = {
     "check_year_patterns": True,       # word+year structure detection
     "color": "auto",                   # ANSI color output: auto (real terminal) / on / off
     "max_file_size": 0,                # file size cap in bytes for file ops; 0 = no limit
+    "allow_legacy_decrypt": True,      # permit v2 / prefixless legacy decryption paths
+    "reject_symlinks": True,           # refuse symlinked inputs/outputs for file operations
+    "audit_log": "",                   # optional JSONL audit log path (empty = disabled)
+    "artifact_dir": "",                # RSA key / QR image output dir (empty = script dir)
 }
 
 
@@ -672,6 +705,10 @@ _CONFIG_ENV_MAP = {
     "check_year_patterns": ("CRYPTPOUCH_CHECK_YEAR_PATTERNS", "bool"),
     "color":              ("CRYPTPOUCH_COLOR", "str"),
     "max_file_size":      ("CRYPTPOUCH_MAX_FILE_SIZE", "int"),
+    "allow_legacy_decrypt": ("CRYPTPOUCH_ALLOW_LEGACY_DECRYPT", "bool"),
+    "reject_symlinks":    ("CRYPTPOUCH_REJECT_SYMLINKS", "bool"),
+    "audit_log":          ("CRYPTPOUCH_AUDIT_LOG", "str"),
+    "artifact_dir":       ("CRYPTPOUCH_ARTIFACT_DIR", "str"),
 }
 
 
@@ -743,6 +780,18 @@ PREFIX_AES_V3 = b"$CP3$"
 
 
 PREFIX_CHACHA20 = b"$CC1$"
+
+
+# Authenticated-header formats (v2.11.0): the prefix + salt + nonce (iv) are fed
+# to the AEAD as associated data, so any header tampering or algorithm-downgrade
+# swap fails authentication instead of merely yielding garbage plaintext.
+PREFIX_AES_V4 = b"$CP4$"
+
+
+PREFIX_CHACHA20_V2 = b"$CC2$"
+
+
+PREFIX_AES_CBC_V3 = b"$AC3$"
 
 
 ARGON2_TIME_COST = CONFIG["argon2_time_cost"]

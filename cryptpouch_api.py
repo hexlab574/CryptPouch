@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-cryptpouch_api.py — AI-friendly Python API for CryptPouch v2.10.2
+cryptpouch_api.py — AI-friendly Python API for CryptPouch v2.11.0
 ================================================================
 
 A clean, non-interactive wrapper around CryptPouch.py so that AI agents,
@@ -80,11 +80,11 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "cryptpouch_api.py must sit in the same directory as CryptPouch.py "
-        "(v2.10.2). Feature dependencies: pip install pycryptodome argon2-cffi "
+        "(v2.11.0). Feature dependencies: pip install pycryptodome argon2-cffi "
         "pyzbar Pillow qrcode pyperclip"
     ) from exc
 
-__version__ = "2.10.2"
+__version__ = "2.11.0"
 
 __all__ = [
     "CryptPouchAPIError",

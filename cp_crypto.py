@@ -108,6 +108,24 @@ def _note_legacy_params(iterations: int, hash_name: str, dk_len: int):
         cp_shared.printer.info(cp_shared.i18n.t("legacy_decrypt_hint", iters=iterations, hash=hash_name))
 
 
+_LEGACY_FORMAT_NOTICED = {"done": False}
+
+
+def _require_legacy_allowed() -> None:
+    """Gate legacy (unauthenticated-header / older-prefix) decryption paths on the
+    allow_legacy_decrypt config flag. New formats ($CP4$ / $CC2$ / $AC3$) never
+    call this."""
+    if not cp_shared.CONFIG.get("allow_legacy_decrypt", True):
+        raise cp_shared.FormatNotSupportedError(cp_shared.i18n.t("legacy_decrypt_disabled"))
+
+
+def _note_legacy_format() -> None:
+    """Warn once when ciphertext with an unauthenticated header was decrypted."""
+    if not _LEGACY_FORMAT_NOTICED["done"]:
+        _LEGACY_FORMAT_NOTICED["done"] = True
+        cp_shared.printer.warn(cp_shared.i18n.t("format_legacy_upgrade"))
+
+
 def _is_readable_text(raw: bytes) -> bool:
     """Roughly judge whether bytes are readable text (false-positive filter for CBC unauthenticated probing).
     A minimum length gate is applied: very short plaintext (1-3 bytes) cannot be reliably distinguished
@@ -125,20 +143,23 @@ class AESGCMTool:
         self.iterations = iterations
 
     def encrypt(self, plain_text: str) -> str:
-        """v3 format: Argon2id derivation + AES-256-GCM, prefixed with $CP3$."""
+        """v4 format: Argon2id derivation + AES-256-GCM over an authenticated
+        header ($CP4$ prefix + salt + nonce supplied as associated data)."""
         from Crypto.Cipher import AES
         from Crypto.Random import get_random_bytes
 
         salt = get_random_bytes(cp_shared.ARGON2_SALT_SIZE)
         nonce = get_random_bytes(cp_shared.NONCE_SIZE)
+        header = cp_shared.PREFIX_AES_V4 + salt + nonce
         key = bytearray(derive_argon2_key(self.password, salt))
         try:
             cipher = AES.new(bytes(key), AES.MODE_GCM, nonce=nonce)
+            cipher.update(header)
             ciphertext, tag = cipher.encrypt_and_digest(plain_text.encode("utf-8"))
         finally:
             _wipe_memory(key)
 
-        pack = cp_shared.PREFIX_AES_V3 + salt + nonce + tag + ciphertext
+        pack = header + tag + ciphertext
         return base64.b64encode(pack).decode("utf-8")
 
     def decrypt(self, b64_str: str) -> str:
@@ -149,8 +170,32 @@ class AESGCMTool:
         except base64.binascii.Error:
             raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_b64_corrupted"))
 
-        # v3: Argon2id + $CP3$ prefix (formal format)
+        # v4: Argon2id + $CP4$ prefix, header bound as AAD (current format)
+        if pack.startswith(cp_shared.PREFIX_AES_V4):
+            data = pack[len(cp_shared.PREFIX_AES_V4):]
+            if len(data) < cp_shared.ARGON2_SALT_SIZE + cp_shared.NONCE_SIZE + cp_shared.TAG_SIZE:
+                raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_len_invalid"))
+            salt = data[:cp_shared.ARGON2_SALT_SIZE]
+            nonce = data[cp_shared.ARGON2_SALT_SIZE:cp_shared.ARGON2_SALT_SIZE + cp_shared.NONCE_SIZE]
+            tag = data[cp_shared.ARGON2_SALT_SIZE + cp_shared.NONCE_SIZE:cp_shared.ARGON2_SALT_SIZE + cp_shared.NONCE_SIZE + cp_shared.TAG_SIZE]
+            ciphertext = data[cp_shared.ARGON2_SALT_SIZE + cp_shared.NONCE_SIZE + cp_shared.TAG_SIZE:]
+            header = cp_shared.PREFIX_AES_V4 + salt + nonce
+
+            key = bytearray(derive_argon2_key(self.password, salt))
+            try:
+                cipher = AES.new(bytes(key), AES.MODE_GCM, nonce=nonce)
+                cipher.update(header)
+                try:
+                    raw = cipher.decrypt_and_verify(ciphertext, tag)
+                except ValueError:
+                    raise cp_shared.PasswordError(cp_shared.i18n.t("err_pwd_or_tamper"))
+            finally:
+                _wipe_memory(key)
+            return cp_utils._decode_with_hint(raw)
+
+        # v3: Argon2id + $CP3$ prefix (legacy: header not authenticated)
         if pack.startswith(cp_shared.PREFIX_AES_V3):
+            _require_legacy_allowed()
             data = pack[len(cp_shared.PREFIX_AES_V3):]
             if len(data) < cp_shared.ARGON2_SALT_SIZE + cp_shared.NONCE_SIZE + cp_shared.TAG_SIZE:
                 raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_len_invalid"))
@@ -168,9 +213,11 @@ class AESGCMTool:
                     raise cp_shared.PasswordError(cp_shared.i18n.t("err_pwd_or_tamper"))
             finally:
                 _wipe_memory(key)
+            _note_legacy_format()
             return cp_utils._decode_with_hint(raw)
 
-        # v2: PBKDF2 600k + $AG2$ prefix (fast path)
+        # v2: PBKDF2 600k + $AG2$ prefix (fast path); prefixless = oldest legacy
+        _require_legacy_allowed()
         is_v2 = pack.startswith(cp_shared.PREFIX_AES_GCM_V2)
         offset = len(cp_shared.PREFIX_AES_GCM_V2) if is_v2 else 0
         data = pack[offset:]
@@ -227,6 +274,7 @@ class AESCBCWithHMACTool:
 
         salt = get_random_bytes(cp_shared.SALT_SIZE)
         iv = get_random_bytes(cp_shared.IV_SIZE)
+        header = cp_shared.PREFIX_AES_CBC_V3 + salt + iv
         enc_key, mac_key = _cbc_derive_key_pair(self.password, salt, self.iterations)
         enc_key = bytearray(enc_key)
         mac_key = bytearray(mac_key)
@@ -236,13 +284,13 @@ class AESCBCWithHMACTool:
             ciphertext = cipher.encrypt(padded)
 
             h = HMAC.new(bytes(mac_key), digestmod=SHA256)
-            h.update(iv + ciphertext)
+            h.update(header + ciphertext)
             mac = h.digest()
         finally:
             _wipe_memory(enc_key)
             _wipe_memory(mac_key)
 
-        pack = cp_shared.PREFIX_AES_CBC_V2 + salt + iv + mac + ciphertext
+        pack = header + mac + ciphertext
         return base64.b64encode(pack).decode("utf-8")
 
     def decrypt(self, b64_str: str) -> str:
@@ -254,6 +302,42 @@ class AESCBCWithHMACTool:
         except base64.binascii.Error:
             raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_b64_corrupted"))
 
+        # $AC3$: separated-key AES-CBC + HMAC-SHA256 whose MAC also covers the
+        # prefix and salt, so the header is authenticated too.
+        if pack.startswith(cp_shared.PREFIX_AES_CBC_V3):
+            data = pack[len(cp_shared.PREFIX_AES_CBC_V3):]
+            min_len = cp_shared.SALT_SIZE + cp_shared.IV_SIZE + cp_shared.HMAC_SIZE + 16
+            if len(data) < min_len:
+                raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_len_invalid"))
+
+            salt = data[:cp_shared.SALT_SIZE]
+            iv = data[cp_shared.SALT_SIZE:cp_shared.SALT_SIZE + cp_shared.IV_SIZE]
+            mac = data[cp_shared.SALT_SIZE + cp_shared.IV_SIZE:cp_shared.SALT_SIZE + cp_shared.IV_SIZE + cp_shared.HMAC_SIZE]
+            ciphertext = data[cp_shared.SALT_SIZE + cp_shared.IV_SIZE + cp_shared.HMAC_SIZE:]
+            header = cp_shared.PREFIX_AES_CBC_V3 + salt + iv
+
+            enc_key, mac_key = _cbc_derive_key_pair(self.password, salt, self.iterations)
+            enc_key = bytearray(enc_key)
+            mac_key = bytearray(mac_key)
+            try:
+                h = HMAC.new(bytes(mac_key), digestmod=SHA256)
+                h.update(header + ciphertext)
+                try:
+                    h.verify(mac)
+                except ValueError:
+                    raise cp_shared.PasswordError(cp_shared.i18n.t("err_pwd_or_tamper"))
+                cipher = AES.new(bytes(enc_key), AES.MODE_CBC, iv=iv)
+                try:
+                    raw_padded = cipher.decrypt(ciphertext)
+                    raw = pkcs7_unpad(raw_padded)
+                except ValueError:
+                    raise cp_shared.PasswordError(cp_shared.i18n.t("err_pwd_or_tamper"))
+            finally:
+                _wipe_memory(enc_key)
+                _wipe_memory(mac_key)
+            return cp_utils._decode_with_hint(raw)
+
+        _require_legacy_allowed()
         is_v2 = pack.startswith(cp_shared.PREFIX_AES_CBC_V2)
         offset = len(cp_shared.PREFIX_AES_CBC_V2) if is_v2 else 0
         data = pack[offset:]
@@ -347,14 +431,16 @@ class ChaCha20Poly1305Tool:
 
         salt = get_random_bytes(cp_shared.ARGON2_SALT_SIZE)
         nonce = get_random_bytes(cp_shared.NONCE_SIZE)  # 12-byte nonce (RFC 8439)
+        header = cp_shared.PREFIX_CHACHA20_V2 + salt + nonce
         key = bytearray(derive_argon2_key(self.password, salt))
         try:
             cipher = ChaCha20_Poly1305.new(key=bytes(key), nonce=nonce)
+            cipher.update(header)
             ciphertext, tag = cipher.encrypt_and_digest(plain_text.encode("utf-8"))
         finally:
             _wipe_memory(key)
 
-        pack = cp_shared.PREFIX_CHACHA20 + salt + nonce + tag + ciphertext
+        pack = header + tag + ciphertext
         return base64.b64encode(pack).decode("utf-8")
 
     def decrypt(self, b64_str: str) -> str:
@@ -365,12 +451,20 @@ class ChaCha20Poly1305Tool:
         except base64.binascii.Error:
             raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_b64_corrupted"))
 
-        if not pack.startswith(cp_shared.PREFIX_CHACHA20):
+        if pack.startswith(cp_shared.PREFIX_CHACHA20_V2):
+            prefix = cp_shared.PREFIX_CHACHA20_V2
+            authenticated = True
+        elif pack.startswith(cp_shared.PREFIX_CHACHA20):
+            prefix = cp_shared.PREFIX_CHACHA20
+            authenticated = False
+        else:
             # Not our format: report as wrong password / not ciphertext so the
             # caller can route to another cipher family without legacy probing
             raise cp_shared.PasswordError(cp_shared.i18n.t("err_pwd_or_tamper"))
 
-        data = pack[len(cp_shared.PREFIX_CHACHA20):]
+        data = pack[len(prefix):]
+        if not authenticated:
+            _require_legacy_allowed()
         if len(data) < cp_shared.ARGON2_SALT_SIZE + cp_shared.NONCE_SIZE + cp_shared.TAG_SIZE:
             raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_len_invalid"))
         salt = data[:cp_shared.ARGON2_SALT_SIZE]
@@ -381,11 +475,15 @@ class ChaCha20Poly1305Tool:
         key = bytearray(derive_argon2_key(self.password, salt))
         try:
             cipher = ChaCha20_Poly1305.new(key=bytes(key), nonce=nonce)
+            if authenticated:
+                cipher.update(prefix + salt + nonce)
             raw = cipher.decrypt_and_verify(ciphertext, tag)
         except ValueError:
             raise cp_shared.PasswordError(cp_shared.i18n.t("err_pwd_or_tamper"))
         finally:
             _wipe_memory(key)
+        if not authenticated:
+            _note_legacy_format()
         return cp_utils._decode_with_hint(raw)
 
 

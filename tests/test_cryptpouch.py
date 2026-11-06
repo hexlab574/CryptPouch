@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for CryptPouch v2.10.2.
+"""Unit tests for CryptPouch v2.11.0.
 
 Run from the CryptPouch package directory:
     python -m unittest discover -s tests -v
@@ -66,10 +66,13 @@ class TextCryptoRoundtripTest(unittest.TestCase):
     def test_output_is_base64_with_prefix(self):
         ct = cp.ChaCha20Poly1305Tool("pw").encrypt("x")
         raw = base64.b64decode(ct)
-        self.assertTrue(raw.startswith(cp.PREFIX_CHACHA20))
+        self.assertTrue(raw.startswith(cp.PREFIX_CHACHA20_V2))
         ct3 = cp.AESGCMTool("pw").encrypt("x")
         raw3 = base64.b64decode(ct3)
-        self.assertTrue(raw3.startswith(cp.PREFIX_AES_V3))
+        self.assertTrue(raw3.startswith(cp.PREFIX_AES_V4))
+        ct_cbc = cp.AESCBCWithHMACTool("pw").encrypt("x")
+        raw_cbc = base64.b64decode(ct_cbc)
+        self.assertTrue(raw_cbc.startswith(cp.PREFIX_AES_CBC_V3))
 
 
 class ErrorHandlingTest(unittest.TestCase):
@@ -297,7 +300,7 @@ class ReencryptTest(unittest.TestCase):
         new = cp.reencrypt_text(old, "oldpw", "newpw", mode="gcm")
         self.assertEqual(cp.AESGCMTool("newpw").decrypt(new), "upgrade me")
         # the result really is the new format
-        self.assertTrue(base64.b64decode(new).startswith(cp.PREFIX_AES_V3))
+        self.assertTrue(base64.b64decode(new).startswith(cp.PREFIX_AES_V4))
 
     def test_gcm_to_chacha(self):
         old = cp.AESGCMTool("oldpw").encrypt("to chacha")
@@ -456,8 +459,8 @@ class MemoryHygieneTest(unittest.TestCase):
         cp._wipe_memory(data)  # must not raise
         self.assertEqual(data, b"0123456789")
 
-    def test_version_is_2102(self):
-        self.assertIn("Version: 2.10.2", cp.__doc__)
+    def test_version_is_2110(self):
+        self.assertIn("Version: 2.11.0", cp.__doc__)
 
 
 class AutoDecryptRetryTest(unittest.TestCase):
@@ -623,6 +626,124 @@ class FsyncDurabilityTest(unittest.TestCase):
     def test_fsync_dir_tolerates_missing_path(self):
         # Best-effort hardening: an unreachable directory must not raise.
         self.assertIsNone(cp._fsync_dir(os.path.join(tempfile.gettempdir(), "cp_no_such_dir_xyz")))
+
+
+class AuthenticatedHeaderTest(unittest.TestCase):
+    """Round 6: $CP4$ / $CC2$ / $AC3$ bind the ciphertext header as AAD."""
+
+    def test_cp4_text_roundtrip(self):
+        tool = cp.AESGCMTool("pw-cp4")
+        self.assertEqual(cp.AESGCMTool("pw-cp4").decrypt(tool.encrypt("round trip")), "round trip")
+
+    def test_cp4_detects_header_tamper(self):
+        raw = bytearray(base64.b64decode(cp.AESGCMTool("pw").encrypt("x" * 32)))
+        raw[22] ^= 0x01  # nonce byte inside the $CP4$ header
+        with self.assertRaises(cp.CryptoToolError):
+            cp.AESGCMTool("pw").decrypt(base64.b64encode(bytes(raw)).decode())
+
+    def test_cc2_detects_header_tamper(self):
+        raw = bytearray(base64.b64decode(cp.ChaCha20Poly1305Tool("pw").encrypt("x" * 32)))
+        raw[26] ^= 0x01  # nonce byte inside the $CC2$ header
+        with self.assertRaises(cp.CryptoToolError):
+            cp.ChaCha20Poly1305Tool("pw").decrypt(base64.b64encode(bytes(raw)).decode())
+
+    def test_ac3_detects_header_tamper(self):
+        raw = bytearray(base64.b64decode(cp.AESCBCWithHMACTool("pw").encrypt("x" * 32)))
+        raw[6] ^= 0x01  # salt byte covered by the HMAC
+        with self.assertRaises(cp.CryptoToolError):
+            cp.AESCBCWithHMACTool("pw").decrypt(base64.b64encode(bytes(raw)).decode())
+
+    def test_cp3_legacy_ciphertext_still_decrypts(self):
+        # A genuine $CP3$ payload (no AAD) must remain readable.
+        from Crypto.Cipher import AES
+        from Crypto.Random import get_random_bytes
+        salt = get_random_bytes(cp.ARGON2_SALT_SIZE)
+        nonce = get_random_bytes(cp.NONCE_SIZE)
+        cipher = AES.new(cp.derive_argon2_key("pw", salt), AES.MODE_GCM, nonce=nonce)
+        body, tag = cipher.encrypt_and_digest(b"legacy payload")
+        pack = cp.PREFIX_AES_V3 + salt + nonce + tag + body
+        self.assertEqual(cp.AESGCMTool("pw").decrypt(base64.b64encode(pack).decode()), "legacy payload")
+
+    def test_file_encrypt_uses_cp4_and_roundtrips(self):
+        d = _mkdtemp()
+        try:
+            src = os.path.join(d, "big.bin")
+            enc = os.path.join(d, "big.bin.enc")
+            dec = os.path.join(d, "big.out")
+            with open(src, "wb") as f:
+                f.write(os.urandom(4096) * 32)
+            cp.encrypt_file(src, enc, "pw12345")
+            with open(enc, "rb") as f:
+                self.assertEqual(f.read(len(cp.PREFIX_AES_V4)), cp.PREFIX_AES_V4)
+            cp.decrypt_file(enc, dec, "pw12345")
+            with open(src, "rb") as a, open(dec, "rb") as b:
+                self.assertEqual(a.read(), b.read())
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_legacy_gate_blocks_old_formats(self):
+        old = cp.CONFIG["allow_legacy_decrypt"]
+        try:
+            cp.CONFIG["allow_legacy_decrypt"] = False
+            pack = b"$CP3$" + b"\x00" * 44
+            with self.assertRaises(cp.FormatNotSupportedError):
+                cp.AESGCMTool("pw").decrypt(base64.b64encode(pack).decode())
+        finally:
+            cp.CONFIG["allow_legacy_decrypt"] = old
+
+    def test_audit_log_writes_metadata_only(self):
+        d = _mkdtemp()
+        old = cp.CONFIG["audit_log"]
+        try:
+            log = os.path.join(d, "audit.jsonl")
+            cp.CONFIG["audit_log"] = log
+            src = os.path.join(d, "a.bin")
+            enc = os.path.join(d, "a.bin.enc")
+            with open(src, "wb") as f:
+                f.write(b"audit")
+            cp.encrypt_file(src, enc, "pw12345")
+            with open(log, "r", encoding="utf-8") as f:
+                lines = [json.loads(line) for line in f if line.strip()]
+            self.assertEqual(len(lines), 1)
+            self.assertEqual(lines[0]["event"], "encrypt")
+            self.assertTrue(lines[0]["ok"])
+            with open(log, "r", encoding="utf-8") as f:
+                self.assertNotIn("pw12345", f.read())
+        finally:
+            cp.CONFIG["audit_log"] = old
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_symlink_input_rejected(self):
+        d = _mkdtemp()
+        try:
+            target = os.path.join(d, "real.bin")
+            link = os.path.join(d, "link.bin")
+            with open(target, "wb") as f:
+                f.write(b"data")
+            try:
+                os.symlink(target, link)
+            except (OSError, NotImplementedError, AttributeError):
+                self.skipTest("symlink creation not permitted on this platform")
+            with self.assertRaises(ValueError):
+                cp.encrypt_file(link, os.path.join(d, "link.enc"), "pw12345")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_symlink_checker_honors_config(self):
+        """Deterministic coverage of the symlink gate without a real link."""
+        from unittest import mock
+
+        old = cp.CONFIG["reject_symlinks"]
+        try:
+            cp.CONFIG["reject_symlinks"] = True
+            with mock.patch("cp_files.os.path.islink", return_value=True):
+                with self.assertRaises(ValueError):
+                    cp._reject_symlink("fake-link.bin")
+            cp.CONFIG["reject_symlinks"] = False
+            with mock.patch("cp_files.os.path.islink", return_value=True):
+                self.assertIsNone(cp._reject_symlink("fake-link.bin"))
+        finally:
+            cp.CONFIG["reject_symlinks"] = old
 
 
 if __name__ == "__main__":

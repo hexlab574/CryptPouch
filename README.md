@@ -1,6 +1,6 @@
 # CryptPouch
 
-AES-256 encryption toolbox for local, single-user use. Version 2.10.2.
+AES-256 encryption toolbox for local, single-user use. Version 2.11.0.
 
 Interactive menu and command-line interface, with Chinese and English prompts.
 
@@ -9,7 +9,18 @@ Interactive menu and command-line interface, with Chinese and English prompts.
 - Modular codebase (v2.10.0): core engine, utilities, file operations and admin
   helpers are split into small single-purpose modules behind a thin `CryptPouch.py`
   entry point
-- Text encryption: AES-256-GCM (Argon2id, v3 format), AES-256-CBC + HMAC and ChaCha20-Poly1305 (v2.8.0)
+- Text encryption: AES-256-GCM (Argon2id), AES-256-CBC + HMAC and ChaCha20-Poly1305
+- Authenticated ciphertext headers (v2.11.0): the $CP4$ / $CC2$ / $AC3$ formats bind
+  prefix, salt and nonce/IV as associated data, so header tampering or a prefix
+  swap fails authentication instead of decrypting to garbage; older ciphertext
+  still decrypts and upgrades on re-encrypt
+- Symlink-safe file operations: symlinked input/output paths are refused by default
+  (`reject_symlinks`)
+- File size policy re-checked on the open handle, closing the stat-then-open gap
+- Optional legacy decryption switch (`allow_legacy_decrypt`) and optional JSONL
+  audit log (`audit_log`, metadata only, never passwords or plaintext)
+- Configurable artifact directory (`artifact_dir`) for RSA keys and QR images
+- Optional pinned dependency file `requirements-lock.txt` for reproducible installs
 - One-step key rotation / format upgrade (re-encrypt with a new password)
 - Batch recursive encryption/decryption of directories with glob filters
 - Streaming file encryption/decryption, memory friendly for large files, with numbered copies to prevent overwrites
@@ -56,7 +67,7 @@ with `cp_admin` on top).
 | Batch operations | Recursive directory scan with glob filters (`*.txt,*.md`), skips existing `.enc`, in-place `<file>.enc` output |
 | Asymmetric crypto | RSA 2048/3072/4096-bit keys, optional passphrase-protected private key, PKCS1_OAEP |
 | Utilities | Base64, text/file hashing (md5..blake2b), random password generator, strength checker, QR code generate/decode, content type & encoding detection |
-| Configuration | `~/.cryptpouch/config.json` + `CRYPTPOUCH_*` environment variables override defaults (CLI > env > config > defaults) |
+| Configuration | `~/.cryptpouch/config.json` + `CRYPTPOUCH_*` environment variables override defaults (CLI > env > config > defaults); optional `requirements-lock.txt` pins exact dependency versions |
 | Interfaces | Interactive bilingual menu (Chinese/English) and full CLI (`-e/-d/-f/-o/--hash/--lang/--cipher/--password-file`) |
 
 ### Typical use cases
@@ -73,7 +84,10 @@ with `cp_admin` on top).
 ## Security
 
 Threat model, audit history, accepted risks and tradeoffs are documented in
-[SECURITY.md](./SECURITY.md). This tool is intended for learning, research and
+[SECURITY.md](./SECURITY.md). Since v2.11.0 new ciphertext uses authenticated
+headers ($CP4$ / $CC2$ / $AC3$): the prefix, salt and nonce/IV are covered by
+the AEAD or MAC, so header edits and algorithm-downgrade swaps are rejected
+instead of decrypted. This tool is intended for learning, research and
 personal local use only.
 
 ## Requirements
@@ -86,6 +100,12 @@ Install dependencies:
 
 ```bash
 pip install -r requirements.txt
+```
+
+For reproducible installs, an optional pinned set is provided:
+
+```bash
+pip install -r requirements-lock.txt
 ```
 
 ## Usage
@@ -148,6 +168,10 @@ Password-strength options (configurable via config.json or environment variables
 | `check_year_patterns` | `true` | penalize only whole "word + year" passwords (years 1900-2099) |
 | `color` | `auto` | ANSI color output for warnings/errors: `auto` (real terminal), `on`, `off` |
 | `max_file_size` | `0` | file size cap in bytes for file encrypt/decrypt; `0` = no limit (large files are supported) |
+| `allow_legacy_decrypt` | `true` | allow older-prefix and prefixless legacy decryption; set `false` to refuse them entirely |
+| `reject_symlinks` | `true` | refuse symlinked input/output paths for file operations |
+| `audit_log` | (empty) | optional JSONL audit log path; records event, path, timestamp and outcome only |
+| `artifact_dir` | (empty) | directory for RSA keys and QR images; empty = the script directory |
 
 ## License
 

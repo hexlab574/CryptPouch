@@ -1,5 +1,25 @@
 # CryptPouch Roadmap
 
+## Released: v2.11.0 (2026-11, security hardening)
+
+Round 6 hardening; the four long-standing accepted boundaries (-p, no path
+whitelist, no constant-time probing, CBC same-key fallback) are deliberately
+unchanged:
+
+| # | Item | Details |
+| --- | --- | --- |
+| 1 | Authenticated headers | New $CP4$ (AES-256-GCM), $CC2$ (ChaCha20-Poly1305) and $AC3$ (AES-CBC + HMAC) formats bind prefix + salt + nonce/IV as associated data (AAD / MAC input). Header edits and prefix swaps now fail authentication instead of yielding garbage. $CP3$ / $CC1$ / $AC2$ ciphertext still decrypts, prints a one-time notice and upgrades on the next re-encrypt. |
+| 2 | Symlink rejection | File encrypt/decrypt refuse symlinked input and output paths unless reject_symlinks is turned off (default on), so a link cannot redirect the operation elsewhere. |
+| 3 | Open-handle size recheck | The max_file_size cap is re-evaluated on the fstat of the already-open handle, closing the stat-then-open window. |
+| 4 | Legacy decrypt switch | allow_legacy_decrypt (default on) can be disabled to refuse every older-prefix and prefixless legacy decryption path. |
+| 5 | Optional audit log | audit_log writes one JSONL record per file encrypt/decrypt (event, path, timestamp, outcome); passwords, plaintext and key material are never recorded, and audit failures never abort the operation. |
+| 6 | Configurable artifact directory | artifact_dir moves RSA key pairs and QR images out of the code directory when needed; the default remains the script directory. |
+| 7 | Pinned dependencies | requirements-lock.txt pins the runtime-verified package versions for reproducible installs; requirements.txt keeps the lower-bound default policy. |
+
+Covered by 10 new tests (89 total). One real-symlink case is skipped where the
+platform refuses link creation (no administrator privilege); the gate itself is
+also covered deterministically with a mocked link check.
+
 ## Released: v2.10.2 (2026-11, patch)
 
 Documentation consistency fixes plus a durability hardening step:

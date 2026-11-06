@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""CryptPouch v2.10.2 - AES256 encryption toolbox (interactive menu + CLI).
-Version: 2.10.2
+"""CryptPouch v2.11.0 - AES256 encryption toolbox (interactive menu + CLI).
+Version: 2.11.0
 License: MIT
 Note: For learning, research and personal local use only.
 
@@ -29,7 +29,7 @@ from cp_admin import *
 from cp_shared import _setup_console_encoding, _ANSI, _VT_INITIALIZED, _CONFIG_ENV_MAP, _validate_config_values, _refresh_derived_constants, _ensure_vt, _color_enabled, _KEYBOARD_LAYOUT, _WEAK_DICT_CACHE
 from cp_crypto import _wipe_memory, _get_hash_module, _cbc_derive_key_pair, _note_legacy_params, _is_readable_text, _load_weak_password_dict, _keyboard_run_len
 from cp_utils import _encoding_score, _decode_with_hint, _decode_pack_b64, _safe_input, _validate_password_len, _restrict_permissions, _text_decrypt_with_retry, _handle_unexpected_error
-from cp_files import _encrypt_text_with_mode, _collect_targets, _peek_pack_prefix, _try_text_decrypt_family, _try_all_aes_decrypt, _fsync_dir
+from cp_files import _encrypt_text_with_mode, _collect_targets, _peek_pack_prefix, _try_text_decrypt_family, _try_all_aes_decrypt, _fsync_dir, _reject_symlink, _audit, _check_open_size
 
 def show_menu():
     cp_shared.printer.info(cp_shared.i18n.t("menu_title"))
@@ -178,8 +178,8 @@ def menu_loop():
                 if use_pass == "y":
                     passphrase = cp_utils.get_password_with_confirm("rsa_enter_passphrase")
                 priv, pub = cp_utils.rsa_generate_keys(passphrase, key_bits=bits)
-                priv_path = os.path.join(cp_shared.SCRIPT_DIR, "rsa_private.pem")
-                pub_path = os.path.join(cp_shared.SCRIPT_DIR, "rsa_public.pem")
+                priv_path = os.path.join(cp_shared.get_artifact_dir(), "rsa_private.pem")
+                pub_path = os.path.join(cp_shared.get_artifact_dir(), "rsa_public.pem")
                 with open(priv_path, "wb") as f:
                     f.write(priv)
                 cp_utils._restrict_permissions(priv_path)
@@ -267,7 +267,7 @@ def menu_loop():
                 if save == "y":
                     save_path = cp_utils._safe_input(cp_shared.i18n.t("qr_filename_prompt")).strip()
                     if save_path and not os.path.isabs(save_path):
-                        save_path = os.path.join(cp_shared.SCRIPT_DIR, save_path)
+                        save_path = os.path.join(cp_shared.get_artifact_dir(), save_path)
                 try:
                     cp_utils.generate_qr(text, save_path)
                 except (cp_shared.CryptoToolError, ValueError, OSError, UnicodeError) as e:
@@ -422,7 +422,7 @@ def cli_mode():
     parser.add_argument("--hash", help=i18n.t("cli_hash_help"))
     parser.add_argument("--cipher", choices=list(cp_shared.CIPHER_MODES), default="gcm", help=i18n.t("cli_cipher_help"))
     parser.add_argument("--lang", choices=["zh", "en"], default=cp_shared.CONFIG.get("lang") or "zh", help=i18n.t("cli_lang_help"))
-    parser.add_argument("--version", action="version", version="2.10.2")
+    parser.add_argument("--version", action="version", version="2.11.0")
 
     args = parser.parse_args()
 
