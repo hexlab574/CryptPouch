@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Fuzz-style robustness tests for CryptPouch v2.11.2.
+"""Fuzz-style robustness tests for CryptPouch v2.11.3.
 
 Not a coverage fuzzer: these are deterministic pseudo-random loops that hammer
 the crypto paths with random plaintexts, random mutations and random garbage to

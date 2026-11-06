@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for CryptPouch v2.11.2.
+"""Unit tests for CryptPouch v2.11.3.
 
 Run from the CryptPouch package directory:
     python -m unittest discover -s tests -v
@@ -549,6 +549,74 @@ class ThroughputDefaultsTest(unittest.TestCase):
         self.assertGreater(cp.PROGRESS_MIN_INTERVAL, 0)
 
 
+class HashProgressThrottleTest(unittest.TestCase):
+    """Hashing a large file printed one progress line per 1 MiB chunk, so a
+    gigabyte-sized hash flushed thousands of lines into the terminal."""
+
+    def test_large_hash_prints_few_lines(self):
+        d = _mkdtemp()
+        try:
+            p = os.path.join(d, "big.bin")
+            with open(p, "wb") as f:
+                for _ in range(20):
+                    f.write(b"\x5a" * (1024 * 1024))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                digest = cp.calc_file_hash(p, "sha256")
+            self.assertEqual(len(digest), 64)
+            lines = [l for l in buf.getvalue().replace("\r", "\n").split("\n") if l.strip()]
+            self.assertLessEqual(len(lines), 12, "progress flooded the terminal: %d lines" % len(lines))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+class BatchDecryptOverwriteTest(unittest.TestCase):
+    """Batch restore overwrites the plaintext in place; the count must be
+    reported instead of applied silently."""
+
+    def test_overwritten_targets_are_reported(self):
+        d = _mkdtemp()
+        try:
+            src = os.path.join(d, "a.txt")
+            with open(src, "w", encoding="utf-8") as f:
+                f.write("original payload")
+            cp.encrypt_file(src, src + ".enc", "pw")
+            # the plaintext is still there, so restoring it overwrites itself
+            r = cp.batch_decrypt(d, "pw")
+            self.assertEqual(len(r["decrypted"]), 1)
+            self.assertEqual(len(r["existing"]), 1)
+            with open(src, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read(), "original payload")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+class CliGuardTest(unittest.TestCase):
+    """Contradictory or target-less invocations must fail loudly instead of
+    silently doing one thing (or nothing) and exiting 0."""
+
+    def _run(self, args):
+        import subprocess
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "CryptPouch.py")
+        p = subprocess.run([sys.executable, script] + args, capture_output=True,
+                           text=True, timeout=60)
+        return p.returncode, (p.stdout or "") + (p.stderr or "")
+
+    def test_encrypt_and_decrypt_conflict(self):
+        rc, out = self._run(["-e", "x", "-d", "y", "-p", "pw"])
+        self.assertEqual(rc, 2)
+        self.assertIn("-e", out)
+
+    def test_file_flag_without_target(self):
+        rc, out = self._run(["-f", "-p", "pw"])
+        self.assertEqual(rc, 2)
+
+    def test_empty_password_is_rejected_without_prompting(self):
+        rc, out = self._run(["-e", "x", "-f", "-p", ""])
+        self.assertEqual(rc, 1)
+        self.assertTrue("密码" in out or "assword" in out)
+
+
 class ConfigTest(unittest.TestCase):
     """config.json + CRYPTPOUCH_* environment variable handling."""
 
@@ -622,8 +690,8 @@ class MemoryHygieneTest(unittest.TestCase):
         cp._wipe_memory(data)  # must not raise
         self.assertEqual(data, b"0123456789")
 
-    def test_version_is_2112(self):
-        self.assertIn("Version: 2.11.2", cp.__doc__)
+    def test_version_is_2113(self):
+        self.assertIn("Version: 2.11.3", cp.__doc__)
 
 
 class AutoDecryptRetryTest(unittest.TestCase):

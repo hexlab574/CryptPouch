@@ -1,5 +1,21 @@
 # CryptPouch Roadmap
 
+## Released: v2.11.3 (2026-11, CLI guards and audit cleanup)
+
+| # | Item | Details |
+| --- | --- | --- |
+| 1 | Contradictory CLI use rejected | `-e` together with `-d` used to encrypt and never decrypt, exiting 0. `-f` without a target did nothing and still exited 0. Both now fail with a usage error (exit 2). |
+| 2 | Empty password no longer hangs | `-p ""` fell through to the interactive prompt and blocked forever when stdin was not a terminal. An empty `-p` or `--password-file` is rejected at once (exit 1). |
+| 3 | Hash failures exit non-zero | `--hash` with an unknown algorithm printed an error but exited 0, so scripts saw success. |
+| 4 | Batch restore reports overwrites | Batch decrypt overwrites the existing plaintext by design; the number of overwritten targets is now printed instead of applied silently. |
+| 5 | Hash progress throttled | Hashing a large file printed one line per 1 MiB block; it now uses the same 0.15 s throttle as encrypt/decrypt. |
+| 6 | Dead i18n entries removed | 10 message keys that no code path could reach were deleted (both languages), leaving 154 symmetrical keys plus the 5 new guard/overwrite messages. |
+
+Covered by 5 new tests (106 total). Verified on the Windows host: 16 filename
+and permission edge cases (CJK, space, emoji, trailing dot, hidden, no suffix,
+upper-case .ENC, 0 bytes, 1 byte, 200-char name, read-only source, unwritable
+directory) all round-trip or fail cleanly.
+
 ## Released: v2.11.2 (2026-11, batch overwrite reporting)
 
 | # | Item | Details |

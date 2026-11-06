@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""CryptPouch v2.11.2 - AES256 encryption toolbox (interactive menu + CLI).
-Version: 2.11.2
+"""CryptPouch v2.11.3 - AES256 encryption toolbox (interactive menu + CLI).
+Version: 2.11.3
 License: MIT
 Note: For learning, research and personal local use only.
 
@@ -447,6 +447,8 @@ def menu_loop():
                     print(cp_shared.i18n.t("batch_summary", ok=len(result["decrypted"]),
                                            failed=len(result["failed"]),
                                            skipped=len(result.get("skipped", []))))
+                    if result.get("existing"):
+                        print(cp_shared.i18n.t("batch_overwritten_n", n=len(result["existing"])))
                     for path, err in result["failed"]:
                         cp_shared.printer.fail(f"{path}: {err}")
                 except (cp_shared.CryptoToolError, ValueError, OSError, UnicodeError) as e:
@@ -501,9 +503,19 @@ def cli_mode():
     parser.add_argument("--hash", help=i18n.t("cli_hash_help"))
     parser.add_argument("--cipher", choices=list(cp_shared.CIPHER_MODES), default="gcm", help=i18n.t("cli_cipher_help"))
     parser.add_argument("--lang", choices=["zh", "en"], default=cp_shared.CONFIG.get("lang") or "zh", help=i18n.t("cli_lang_help"))
-    parser.add_argument("--version", action="version", version="2.11.2")
+    parser.add_argument("--version", action="version", version="2.11.3")
 
     args = parser.parse_args()
+
+    # Reject contradictory invocations instead of silently picking one side:
+    # "-e x -d x" used to encrypt and never decrypt, and a bare "-f" did nothing
+    # while still exiting 0, so a script could not tell it had done nothing.
+    if args.encrypt and args.decrypt:
+        printer.fail(i18n.t("cli_conflict_actions"))
+        sys.exit(2)
+    if args.file and not (args.encrypt or args.decrypt):
+        printer.fail(i18n.t("cli_target_required"))
+        sys.exit(2)
 
     if args.hash:
         target = args.encrypt or args.decrypt
@@ -514,7 +526,8 @@ def cli_mode():
             h = cp_utils.calc_file_hash(target, args.hash)
             print(h)
         except Exception as e:
-            printer.fail(str(e))
+            printer.fail("%s: %s" % (i18n.t("cli_hash_failed"), e))
+            sys.exit(1)
         return
 
     # CLI mode also checks core dependencies
@@ -531,13 +544,21 @@ def cli_mode():
             try:
                 with open(args.password_file, "r", encoding="utf-8") as f:
                     pwd = f.read().strip()
+                if not pwd:
+                    printer.fail(i18n.t("pwd_empty"))
+                    sys.exit(1)
                 if len(pwd) > cp_shared.PASSWORD_MAX_LEN:
                     printer.fail(i18n.t("pwd_too_long", max=cp_shared.PASSWORD_MAX_LEN))
                     sys.exit(1)
             except Exception as e:
                 printer.fail(str(e))
                 sys.exit(1)
-        elif args.password:
+        elif args.password is not None:
+            if not args.password.strip():
+                # An empty -p used to fall through to the interactive prompt,
+                # which hangs forever when stdin is not a terminal.
+                printer.fail(i18n.t("pwd_empty"))
+                sys.exit(1)
             if len(args.password) > cp_shared.PASSWORD_MAX_LEN:
                 printer.fail(i18n.t("pwd_too_long", max=cp_shared.PASSWORD_MAX_LEN))
                 sys.exit(1)
@@ -578,6 +599,8 @@ def cli_mode():
                     print(i18n.t("batch_summary", ok=len(res["decrypted"]),
                                  failed=len(res["failed"]),
                                  skipped=len(res.get("skipped", []))))
+                    if res.get("existing"):
+                        print(i18n.t("batch_overwritten_n", n=len(res["existing"])))
                     for path, err in res["failed"]:
                         printer.fail(f"{path}: {err}")
                     sys.exit(1 if res["failed"] else 0)

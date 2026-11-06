@@ -8,7 +8,7 @@ the known security considerations of the project.
 
 The following version series currently receive security support:
 
-- 2.11.x  -  actively supported (latest: 2.11.2)
+- 2.11.x  -  actively supported (latest: 2.11.3)
 - 2.10.x  -  supported (latest: 2.10.2)
 - 2.9.x  -  supported (latest: 2.9.0)
 - 2.8.x  -  supported (latest: 2.8.0)
@@ -65,11 +65,14 @@ count from 23 to 14. Rounds 4, 5 and 6 are hardening additions (six, six and
 seven items respectively, worded as "added" below): they strengthen the product
 rather than fix known vulnerabilities, so the defect count is unchanged at 14.
 
-v2.11.1 and v2.11.2 are data-integrity releases, not another security round:
-v2.11.1 refuses in-place encrypt/decrypt (output resolving to the input file),
-which previously truncated the payload and returned success, and makes CLI
-failures exit non-zero; v2.11.2 stops a batch run from silently rewriting an
-existing ciphertext. Neither changes the security posture above.
+v2.11.1, v2.11.2 and v2.11.3 are data-integrity and robustness releases, not
+another security round. v2.11.1 refuses in-place encrypt/decrypt (output
+resolving to the input file), which previously truncated the payload and
+returned success, and makes CLI failures exit non-zero; v2.11.2 stops a batch
+run from silently rewriting an existing ciphertext. v2.11.3 rejects
+contradictory CLI invocations (encrypt plus decrypt, or a file flag with no
+target) and an empty password, all of which used to exit 0 or block on a
+prompt. None of them changes the security posture above.
 
 All reviews to date are author self-review. There is no third-party or paid
 security audit, and community validation is still limited; treat the

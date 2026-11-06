@@ -8,6 +8,7 @@ import getpass
 import hashlib
 import hmac
 import os
+import time
 from typing import Optional, List, Tuple, Dict, Any, Union
 
 def _encoding_score(text: str, enc: str) -> int:
@@ -155,14 +156,22 @@ def calc_file_hash(file_path: str, algorithm: str = "sha256") -> str:
     read_size = 0
 
     with open(file_path, "rb") as f:
+        next_report = 0.0
+        show_progress = file_size > cp_shared.PROGRESS_THRESHOLD
         for chunk in iter(lambda: f.read(cp_shared.CHUNK_SIZE), b''):
             h.update(chunk)
             read_size += len(chunk)
-            if file_size > cp_shared.PROGRESS_THRESHOLD:
-                percent = read_size / file_size * 100
-                print(f"\rProgress: {percent:.1f}%", end="", flush=True)
+            if show_progress:
+                # Same throttle as file encrypt/decrypt: one line per 0.15 s,
+                # not one per chunk (a 1 GiB hash used to print 1024 lines).
+                now = time.monotonic()
+                if now >= next_report:
+                    percent = read_size / file_size * 100
+                    print(f"\rProgress: {percent:.1f}%", end="", flush=True)
+                    next_report = now + cp_shared.PROGRESS_MIN_INTERVAL
 
-    if file_size > cp_shared.PROGRESS_THRESHOLD:
+    if show_progress:
+        print("\rProgress: 100.0%", end="", flush=True)
         print()
 
     return h.hexdigest()

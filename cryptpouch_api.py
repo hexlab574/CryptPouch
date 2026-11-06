@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-cryptpouch_api.py — AI-friendly Python API for CryptPouch v2.11.2
+cryptpouch_api.py — AI-friendly Python API for CryptPouch v2.11.3
 ================================================================
 
 A clean, non-interactive wrapper around CryptPouch.py so that AI agents,
@@ -80,11 +80,11 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "cryptpouch_api.py must sit in the same directory as CryptPouch.py "
-        "(v2.11.2). Feature dependencies: pip install pycryptodome argon2-cffi "
+        "(v2.11.3). Feature dependencies: pip install pycryptodome argon2-cffi "
         "pyzbar Pillow qrcode pyperclip"
     ) from exc
 
-__version__ = "2.11.2"
+__version__ = "2.11.3"
 
 __all__ = [
     "CryptPouchAPIError",
@@ -312,7 +312,7 @@ def reencrypt_file(input_path: str, old_password: str, new_password: str,
 # ----------------------------------------------------------------------
 
 def batch_encrypt(path: str, password: str, pattern: Optional[str] = None,
-                  recursive: bool = True) -> Dict[str, Any]:
+                  recursive: bool = True, overwrite: bool = False) -> Dict[str, Any]:
     """Recursively encrypt every matching file in ``path`` in place as ``<file>.enc``.
 
     Args:
@@ -320,11 +320,14 @@ def batch_encrypt(path: str, password: str, pattern: Optional[str] = None,
         password: passphrase.
         pattern: comma-separated glob filters, e.g. ``"*.txt,*.md"``; None = all files.
         recursive: whether to descend into subdirectories.
+        overwrite: replace an existing ``<file>.enc``. The default keeps it, so a
+                   repeated run is idempotent and never destroys older ciphertext.
 
     Returns:
-        ``{"encrypted": [output paths], "failed": [(path, error), ...]}``
+        ``{"encrypted": [output paths], "failed": [(path, error), ...],
+        "skipped": [paths filtered out], "existing": [ciphertext kept]}``
     """
-    return _cp.batch_encrypt(path, password, pattern, recursive)
+    return _cp.batch_encrypt(path, password, pattern, recursive, overwrite)
 
 
 def batch_decrypt(path: str, password: str, pattern: Optional[str] = None,
@@ -339,7 +342,8 @@ def batch_decrypt(path: str, password: str, pattern: Optional[str] = None,
         recursive: whether to descend into subdirectories.
 
     Returns:
-        ``{"decrypted": [output paths], "failed": [(path, error), ...]}``
+        ``{"decrypted": [output paths], "failed": [(path, error), ...],
+        "skipped": [paths filtered out]}``
     """
     return _cp.batch_decrypt(path, password, pattern, recursive)
 

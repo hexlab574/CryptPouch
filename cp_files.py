@@ -260,7 +260,9 @@ def decrypt_file(input_path: str, output_path: str, password: str):
                     while remaining > 0:
                         chunk = f_in.read(min(cp_shared.CHUNK_SIZE, remaining))
                         if not chunk:
-                            break
+                            # The header promised more data than the file holds:
+                            # report a damaged file, not a wrong password.
+                            raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_len_invalid"))
                         f_out.write(cipher.decrypt(chunk))
                         read_size += len(chunk)
                         remaining -= len(chunk)
@@ -273,6 +275,8 @@ def decrypt_file(input_path: str, output_path: str, password: str):
                     if show_progress:
                         print("\rProgress: 100.0%", end="", flush=True)
                     tag = f_in.read(cp_shared.TAG_SIZE)
+                    if len(tag) != cp_shared.TAG_SIZE:
+                        raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_len_invalid"))
                     try:
                         cipher.verify(tag)
                     except ValueError:
@@ -295,7 +299,11 @@ def decrypt_file(input_path: str, output_path: str, password: str):
                     except OSError:
                         pass
                 if tmp_path and os.path.exists(tmp_path):
-                    os.remove(tmp_path)
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        # Cleanup must never mask the original failure
+                        pass
                 raise
             finally:
                 if show_progress:
@@ -311,6 +319,9 @@ def decrypt_file(input_path: str, output_path: str, password: str):
             salt = f_in.read(cp_shared.SALT_SIZE)
             nonce = f_in.read(cp_shared.NONCE_SIZE)
             tag = f_in.read(cp_shared.TAG_SIZE)
+            if (len(salt) != cp_shared.SALT_SIZE or len(nonce) != cp_shared.NONCE_SIZE
+                    or len(tag) != cp_shared.TAG_SIZE):
+                raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_len_invalid"))
             ciphertext = f_in.read()
 
             key = bytearray(cp_crypto.derive_key(password, salt))
@@ -391,7 +402,11 @@ def reencrypt_file(input_path: str, old_password: str, new_password: str,
         encrypt_file(tmp_path, output_path, new_password)
     finally:
         if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                # Cleanup must never mask the real failure
+                pass
     return output_path
 
 
@@ -469,20 +484,26 @@ def batch_decrypt(path: str, password: str, pattern: Optional[str] = None,
                   recursive: bool = True) -> dict:
     """Decrypt every collected .enc file in place (strips the .enc suffix).
 
-    Note: an existing file with the target name is overwritten (batch restore).
-    Returns {"decrypted": [...], "failed": [(path, error)], "skipped": [...]}."""
+    Batch restore overwrites a plaintext that already exists with the target
+    name, so the overwritten targets are reported under "existing" instead of
+    being applied silently.
+    Returns {"decrypted": [...], "failed": [(path, error)], "skipped": [...],
+    "existing": [...]}."""
     cp_utils._validate_password_len(password)
     patterns = [p.strip() for p in pattern.split(",") if p.strip()] if pattern else None
     files, skipped = _collect_targets(path, patterns, recursive, for_encrypt=False)
-    decrypted, failed = [], []
+    decrypted, failed, overwritten = [], [], []
     for f in files:
         try:
             out = get_decrypt_output_path(f)
+            if os.path.exists(out):
+                overwritten.append(out)
             decrypt_file(f, out, password)
             decrypted.append(out)
         except Exception as e:
             failed.append((f, str(e)))
-    return {"decrypted": decrypted, "failed": failed, "skipped": skipped}
+    return {"decrypted": decrypted, "failed": failed, "skipped": skipped,
+            "existing": overwritten}
 
 
 def detect_content_type(text: str) -> Tuple[str, Optional[str], Optional[str]]:
