@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-cryptpouch_api.py — AI-friendly Python API for CryptPouch v2.11.3
+cryptpouch_api.py — AI-friendly Python API for CryptPouch v2.11.4
 ================================================================
 
 A clean, non-interactive wrapper around CryptPouch.py so that AI agents,
@@ -65,10 +65,11 @@ Dependencies (install once):
 from __future__ import annotations
 
 import contextlib
+import copy
 import io
 import os
 import sys
-import tempfile
+import threading
 from typing import Any, Dict, List, Optional, Union
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
@@ -80,11 +81,11 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "cryptpouch_api.py must sit in the same directory as CryptPouch.py "
-        "(v2.11.3). Feature dependencies: pip install pycryptodome argon2-cffi "
+        "(v2.11.4). Feature dependencies: pip install pycryptodome argon2-cffi "
         "pyzbar Pillow qrcode pyperclip"
     ) from exc
 
-__version__ = "2.11.3"
+__version__ = "2.11.4"
 
 __all__ = [
     "CryptPouchAPIError",
@@ -140,28 +141,47 @@ class _NullPrinter:
         pass
 
 
+# Re-entrant: reencrypt_text() enters _quiet_call, and the underlying
+# implementation may enter again on the same thread.
+_QUIET_LOCK = threading.RLock()
+
+
 def _quiet_call(func, *args, **kwargs):
-    """Run ``func(*args, **kwargs)`` with CryptPouch console output silenced."""
-    saved_printer = _cp.printer
-    saved_stdout = sys.stdout
-    sys.stdout = io.StringIO()
-    _cp.printer = _NullPrinter()
+    """Run ``func(*args, **kwargs)`` with CryptPouch console output silenced.
+
+    The process-wide ``sys.stdout`` and the module-level ``_cp.printer`` are
+    swapped here, so the whole swap has to be serialized: with two concurrent
+    callers, the second one saves the first one's placeholder object and then
+    restores *that* on exit, leaving stdout or the printer silenced for good.
+    A re-entrant lock keeps nested calls working (``reencrypt_text`` enters
+    ``_quiet_call`` twice). Concurrent API calls therefore queue; they never
+    interleave.
+    """
+    with _QUIET_LOCK:
+        saved_printer = _cp.printer
+        saved_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        _cp.printer = _NullPrinter()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            sys.stdout = saved_stdout
+            _cp.printer = saved_printer
+
+
+# Errors the API knows how to explain. Anything else (TypeError, AttributeError,
+# KeyError...) is a programming error and must surface unchanged so it is not
+# hidden behind a generic "call failed" message.
+_API_ERRORS = (_cp.CryptoToolError, ValueError, UnicodeError, OSError)
+
+
+def _api_call(label, func, *args, **kwargs):
+    """Silence output, wrap a *known* failure in CryptPouchAPIError, and let
+    programming errors propagate untouched."""
     try:
-        return func(*args, **kwargs)
-    finally:
-        sys.stdout = saved_stdout
-        _cp.printer = saved_printer
-
-
-def _resolve_key(key: Union[str, bytes, os.PathLike]) -> tuple:
-    """Accept an RSA key as a file path or as PEM bytes/str; return (path, is_temporary)."""
-    if isinstance(key, (str, os.PathLike)) and os.path.isfile(str(key)):
-        return str(key), False
-    data = key.encode("utf-8") if isinstance(key, str) else bytes(key)
-    fd, path = tempfile.mkstemp(prefix="cryptpouch_key_", suffix=".pem")
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(data)
-    return path, True
+        return _quiet_call(func, *args, **kwargs)
+    except _API_ERRORS as exc:
+        raise CryptPouchAPIError("%s failed: %s" % (label, exc)) from exc
 
 
 # ----------------------------------------------------------------------
@@ -193,10 +213,7 @@ def encrypt_text(plaintext: str, password: str, mode: str = "gcm") -> str:
         tool = _cp.ChaCha20Poly1305Tool(password)
     else:
         raise ValueError("mode must be one of: gcm, cbc, chacha20")
-    try:
-        return _quiet_call(tool.encrypt, plaintext)
-    except Exception as exc:
-        raise CryptPouchAPIError(f"Encryption failed: {exc}") from exc
+    return _api_call("Encryption", tool.encrypt, plaintext)
 
 
 def decrypt_text(ciphertext: str, password: str) -> str:
@@ -212,13 +229,7 @@ def decrypt_text(ciphertext: str, password: str) -> str:
     Raises:
         CryptPouchAPIError: wrong password, corrupted data, or unsupported format.
     """
-    try:
-        return _quiet_call(_cp.try_text_decrypt, ciphertext, password)
-    except (_cp.PasswordError, _cp.CipherCorruptedError, _cp.CryptoToolError,
-            ValueError, UnicodeError, OSError) as exc:
-        raise CryptPouchAPIError(
-            "Decryption failed: wrong password, or corrupted/unsupported ciphertext"
-        ) from exc
+    return _api_call("Decryption", _cp.try_text_decrypt, ciphertext, password)
 
 
 # ----------------------------------------------------------------------
@@ -239,7 +250,7 @@ def encrypt_file(input_path: str, password: str,
     """
     if output_path is None:
         output_path = input_path + ".enc"
-    _quiet_call(_cp.encrypt_file, input_path, output_path, password)
+    _api_call("Encryption", _cp.encrypt_file, input_path, output_path, password)
     return output_path
 
 
@@ -259,7 +270,7 @@ def decrypt_file(input_path: str, password: str,
     if output_path is None:
         output_path = (input_path[:-4] if input_path.lower().endswith(".enc")
                        else input_path + ".dec")
-    _quiet_call(_cp.decrypt_file, input_path, output_path, password)
+    _api_call("Decryption", _cp.decrypt_file, input_path, output_path, password)
     return output_path
 
 
@@ -278,12 +289,8 @@ def reencrypt_text(ciphertext: str, old_password: str, new_password: str,
     """
     if mode not in ("gcm", "cbc", "chacha20"):
         raise ValueError("mode must be one of: gcm, cbc, chacha20")
-    try:
-        return _quiet_call(_cp.reencrypt_text, ciphertext, old_password,
-                           new_password, mode)
-    except (_cp.PasswordError, _cp.CipherCorruptedError, _cp.CryptoToolError,
-            ValueError, UnicodeError, OSError) as exc:
-        raise CryptPouchAPIError(f"Re-encryption failed: {exc}") from exc
+    return _api_call("Re-encryption", _cp.reencrypt_text, ciphertext,
+                     old_password, new_password, mode)
 
 
 def reencrypt_file(input_path: str, old_password: str, new_password: str,
@@ -302,8 +309,8 @@ def reencrypt_file(input_path: str, old_password: str, new_password: str,
     if output_path is None:
         output_path = (input_path[:-4] if input_path.lower().endswith(".enc")
                        else input_path) + ".enc"
-    _quiet_call(_cp.reencrypt_file, input_path, old_password,
-                new_password, output_path)
+    _api_call("Re-encryption", _cp.reencrypt_file, input_path, old_password,
+              new_password, output_path)
     return output_path
 
 
@@ -362,7 +369,7 @@ def get_config() -> Dict[str, Any]:
     ``weak_password_file``, ``check_keyboard_patterns``, ``keyboard_pattern_min_len``,
     ``check_year_patterns``.
     """
-    return dict(_cp.CONFIG)
+    return copy.deepcopy(_cp.CONFIG)
 
 
 def set_config(reload: bool = False, config_path: Optional[str] = None, **kwargs) -> Dict[str, Any]:
@@ -402,7 +409,9 @@ def hash_text(text: str, algorithm: str = "sha256") -> str:
 
 def hash_file(file_path: str, algorithm: str = "sha256") -> str:
     """Return the hex digest of the file at ``file_path`` (streamed)."""
-    return _cp.calc_file_hash(file_path, algorithm)
+    if algorithm not in HASH_ALGORITHMS:
+        raise ValueError(f"Unsupported algorithm {algorithm!r}; available: {list(HASH_ALGORITHMS)}")
+    return _api_call("Hashing", _cp.calc_file_hash, file_path, algorithm)
 
 
 # ----------------------------------------------------------------------
@@ -453,10 +462,13 @@ def b64_encode(data: Union[str, bytes]) -> str:
 
 
 def b64_decode(data: str) -> str:
-    """Base64-decode to text (raises ``CryptPouchAPIError`` on corrupt input)."""
+    """Base64-decode to text (raises ``CryptPouchAPIError`` on corrupt input).
+
+    Only decoding failures are wrapped: a non-str argument is a programming
+    error and surfaces as the original TypeError/AttributeError."""
     try:
         return _cp.b64_decode(data)
-    except Exception as exc:
+    except (ValueError, UnicodeError, OSError) as exc:
         raise CryptPouchAPIError(f"Base64 decode failed: {exc}") from exc
 
 
@@ -491,15 +503,11 @@ def rsa_encrypt(public_key: Union[str, bytes, os.PathLike], text: str) -> str:
 
     Returns:
         Base64 ciphertext.
+
+    The PEM content handed in as bytes/str is imported in memory, so a key
+    passed by value never touches the disk.
     """
-    path, is_tmp = _resolve_key(public_key)
-    try:
-        return _cp.rsa_encrypt(path, text)
-    except Exception as exc:
-        raise CryptPouchAPIError(f"RSA encryption failed: {exc}") from exc
-    finally:
-        if is_tmp:
-            os.unlink(path)
+    return _api_call("RSA encryption", _cp.rsa_encrypt, public_key, text)
 
 
 def rsa_decrypt(private_key: Union[str, bytes, os.PathLike], b64_text: str,
@@ -510,15 +518,11 @@ def rsa_decrypt(private_key: Union[str, bytes, os.PathLike], b64_text: str,
         private_key: file path of the PEM private key, or PEM bytes/str directly.
         b64_text:    Base64 ciphertext.
         passphrase:  passphrase of the private key, if any.
-    """
-    path, is_tmp = _resolve_key(private_key)
-    try:
-        return _cp.rsa_decrypt(path, b64_text, passphrase)
-    except Exception as exc:
-        raise CryptPouchAPIError(f"RSA decryption failed: {exc}") from exc
-    finally:
-        if is_tmp:
-            os.unlink(path)
+
+    A private key passed as PEM bytes/str is imported in memory and never
+    written to a temporary file."""
+    return _api_call("RSA decryption", _cp.rsa_decrypt,
+                     private_key, b64_text, passphrase)
 
 
 # ----------------------------------------------------------------------
@@ -577,7 +581,7 @@ def generate_qr(text: str, save_path: Optional[str] = None) -> Optional[str]:
     Returns:
         ``save_path`` when given, else ``None``.
     """
-    _quiet_call(_cp.generate_qr, text, save_path)
+    _api_call("QR generation", _cp.generate_qr, text, save_path)
     return save_path
 
 

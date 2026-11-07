@@ -1,5 +1,17 @@
 # CryptPouch Roadmap
 
+## Released: v2.11.4 (2026-11, API layer hardening)
+
+| # | Item | Details |
+| --- | --- | --- |
+| 1 | API calls are thread-safe | `_quiet_call` swaps `sys.stdout` and the module printer process-wide; two concurrent callers could each restore the other's placeholder and leave output silenced for the rest of the process. A re-entrant lock now covers the whole swap, so concurrent API calls queue instead of clobbering each other. |
+| 2 | One error contract across the API | Some functions wrapped every `Exception` (hiding `TypeError`/`AttributeError` as "call failed"), others let raw `CryptoToolError` escape. All API entry points now wrap only known failures (`CryptoToolError`, `ValueError`, `UnicodeError`, `OSError`) into `CryptPouchAPIError`; programming errors propagate unchanged. |
+| 3 | `get_config` returns an independent copy | It was a `dict()` shallow copy, so a future mutable config value would be writable through the returned dict. It is now a `deepcopy`; today's config holds only scalars, so behaviour is unchanged. |
+| 4 | RSA keys passed by value stay in memory | A PEM handed in as bytes/str used to be written to `cryptpouch_key_*.pem` in the temp directory and deleted afterwards, leaving a window where the key sat on disk (and a leftover file after a hard kill). PEM content is now imported in memory; only real file paths are read from disk. |
+| 5 | Restored two live i18n keys | The v2.11.3 dead-key cleanup removed `cfg_unknown_key` and `cfg_invalid_value`, which `_validate_config_values` does use, so `set_config()` reported the raw key name instead of a readable message. Both are back; the audit script now scans every module including `cp_shared.py`. |
+
+Covered by 7 new tests (113 total).
+
 ## Released: v2.11.3 (2026-11, CLI guards and audit cleanup)
 
 | # | Item | Details |

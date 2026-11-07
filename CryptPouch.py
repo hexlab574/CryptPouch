@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""CryptPouch v2.11.3 - AES256 encryption toolbox (interactive menu + CLI).
-Version: 2.11.3
+"""CryptPouch v2.11.4 - AES256 encryption toolbox (interactive menu + CLI).
+Version: 2.11.4
 License: MIT
 Note: For learning, research and personal local use only.
 
@@ -503,7 +503,7 @@ def cli_mode():
     parser.add_argument("--hash", help=i18n.t("cli_hash_help"))
     parser.add_argument("--cipher", choices=list(cp_shared.CIPHER_MODES), default="gcm", help=i18n.t("cli_cipher_help"))
     parser.add_argument("--lang", choices=["zh", "en"], default=cp_shared.CONFIG.get("lang") or "zh", help=i18n.t("cli_lang_help"))
-    parser.add_argument("--version", action="version", version="2.11.3")
+    parser.add_argument("--version", action="version", version="2.11.4")
 
     args = parser.parse_args()
 

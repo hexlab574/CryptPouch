@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for the AI-friendly wrapper cryptpouch_api.py (v2.11.3).
+"""Regression tests for the AI-friendly wrapper cryptpouch_api.py (v2.11.4).
 
 Run: python -m unittest discover -s tests -v
 """
@@ -134,7 +134,92 @@ class ApiMiscTest(unittest.TestCase):
         self.assertEqual(cfg["rsa_bits"], 2048)
 
     def test_version(self):
-        self.assertEqual(api.__version__, "2.11.3")
+        self.assertEqual(api.__version__, "2.11.4")
+
+
+class ApiThreadSafetyTest(unittest.TestCase):
+    """_quiet_call swaps sys.stdout and the CryptPouch printer process-wide;
+    concurrent callers used to restore each other's placeholder objects and
+    leave output silenced for good."""
+
+    def test_concurrent_calls_restore_globals(self):
+        import io
+        import threading
+        import CryptPouch as cp
+
+        orig_out = sys.stdout
+        orig_printer = cp.printer
+        errors = []
+
+        def worker():
+            try:
+                for i in range(10):
+                    api.encrypt_text("payload-%d" % i, "pw")
+            except Exception as exc:  # pragma: no cover - reported below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        self.assertIs(sys.stdout, orig_out)
+        self.assertIs(cp.printer, orig_printer)
+
+
+class ApiErrorContractTest(unittest.TestCase):
+    """Known failures become CryptPouchAPIError; programming errors surface as-is."""
+
+    def test_file_errors_are_wrapped(self):
+        with self.assertRaises(api.CryptPouchAPIError):
+            api.encrypt_file(os.path.join(tempfile.gettempdir(), "cp_missing_input.bin"), "pw")
+
+    def test_corrupt_base64_is_wrapped(self):
+        with self.assertRaises(api.CryptPouchAPIError):
+            api.b64_decode("!!!not-base64!!!")
+
+    def test_programming_errors_are_not_wrapped(self):
+        with self.assertRaises(AttributeError):
+            api.encrypt_text(123, "pw")
+        with self.assertRaises(TypeError):
+            api.b64_decode(123)
+
+
+class ApiIsolationTest(unittest.TestCase):
+    def test_get_config_copy_is_independent(self):
+        import CryptPouch as cp
+        cfg = api.get_config()
+        cfg["color"] = "off"
+        cfg["weak_password_file"] = "rockyou.txt"
+        self.assertNotEqual(cp.CONFIG["color"], "off")
+        self.assertNotEqual(cp.CONFIG["weak_password_file"], "rockyou.txt")
+
+    def test_rsa_by_value_leaves_no_temp_file(self):
+        import glob
+        before = set(glob.glob(os.path.join(tempfile.gettempdir(), "cryptpouch_key_*")))
+        keys = api.rsa_generate_keys(key_bits=2048)
+        token = api.rsa_encrypt(keys["public_key"], "value mode")
+        self.assertEqual(api.rsa_decrypt(keys["private_key"], token), "value mode")
+        after = set(glob.glob(os.path.join(tempfile.gettempdir(), "cryptpouch_key_*")))
+        self.assertEqual(after, before)
+
+
+class ApiConfigMessageTest(unittest.TestCase):
+    """A deleted-then-restored key: the message must be readable text, never
+    the raw i18n key name."""
+
+    def test_unknown_key_message_is_translated(self):
+        import CryptPouch as cp
+        path = os.path.join(tempfile.gettempdir(), "cp_api_cfg_guard.json")
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                cp.set_config(hacker_key="pwned", config_path=path)
+            self.assertNotIn("cfg_unknown_key", str(ctx.exception))
+            self.assertIn("hacker_key", str(ctx.exception))
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
 
 
 if __name__ == "__main__":

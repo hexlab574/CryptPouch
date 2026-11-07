@@ -199,13 +199,30 @@ def rsa_generate_keys(protect_passphrase: Optional[str] = None,
     return private, public
 
 
-def rsa_encrypt(public_key_path: str, text: str) -> str:
+def _read_rsa_key_source(key_source, passphrase: Optional[str] = None):
+    """Load an RSA key from a file path or from PEM bytes/str held in memory.
+
+    Passing the PEM itself (bytes, or a str containing the "BEGIN" armor) avoids
+    writing key material to a temporary file, which otherwise leaves a window
+    where the private key sits in the system temp directory."""
     from Crypto.PublicKey import RSA
+
+    is_path = isinstance(key_source, (os.PathLike,)) or (
+        isinstance(key_source, str) and "-----BEGIN" not in key_source
+    )
+    if is_path:
+        with open(os.fspath(key_source), "rb") as f:
+            data = f.read()
+    else:
+        data = key_source.encode("utf-8") if isinstance(key_source, str) else bytes(key_source)
+    return RSA.import_key(data, passphrase=passphrase)
+
+
+def rsa_encrypt(public_key_path: str, text: str) -> str:
     from Crypto.Cipher import PKCS1_OAEP
     from Crypto.Hash import SHA256
 
-    with open(public_key_path, "rb") as f:
-        key = RSA.import_key(f.read())
+    key = _read_rsa_key_source(public_key_path)
     cipher = PKCS1_OAEP.new(key, hashAlgo=SHA256)
     data = text.encode("utf-8")
     max_len = key.size_in_bytes() - 2 * SHA256.digest_size - 2
@@ -216,15 +233,12 @@ def rsa_encrypt(public_key_path: str, text: str) -> str:
 
 
 def rsa_decrypt(private_key_path: str, b64_text: str, passphrase: Optional[str] = None) -> str:
-    from Crypto.PublicKey import RSA
     from Crypto.Cipher import PKCS1_OAEP
     from Crypto.Hash import SHA256
 
     if passphrase:
         _validate_password_len(passphrase)
-    with open(private_key_path, "rb") as f:
-        key_data = f.read()
-    key = RSA.import_key(key_data, passphrase=passphrase)
+    key = _read_rsa_key_source(private_key_path, passphrase)
     cipher = PKCS1_OAEP.new(key, hashAlgo=SHA256)
     try:
         raw = base64.b64decode(b64_text)

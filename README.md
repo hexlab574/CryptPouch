@@ -1,6 +1,6 @@
 # CryptPouch
 
-AES-256 encryption toolbox for local, single-user use. Version 2.11.3.
+AES-256 encryption toolbox for local, single-user use. Version 2.11.4.
 
 Interactive menu and command-line interface, with Chinese and English prompts.
 
@@ -38,6 +38,10 @@ Interactive menu and command-line interface, with Chinese and English prompts.
 - CLI refuses contradictory input (v2.11.3): `-e` together with `-d`, or `-f`
   with no target, exits 2 instead of quietly doing one thing (or nothing); an
   empty `-p` is rejected instead of falling into a prompt that hangs a script
+- API library calls are safe to use from threads (v2.11.4): the output-silencing
+  swap is serialized, every entry point reports known failures as
+  `CryptPouchAPIError` (programming errors stay visible), `get_config()` hands
+  back an independent copy, and RSA keys passed as PEM stay in memory
 - Configurable file size cap (`max_file_size`) to protect against accidental processing of huge files (0 = no limit)
 - Atomic decryption output: plaintext is written to a temp file and swapped in only after the tag verifies
 - RSA asymmetric encryption, 2048/3072/4096-bit keys, optional passphrase-protected private key
