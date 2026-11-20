@@ -461,23 +461,30 @@ def batch_encrypt(path: str, password: str, pattern: Optional[str] = None,
     overwrite=True (CLI: --overwrite) to replace the old ciphertext.
 
     Returns {"encrypted": [...], "failed": [(path, error)], "skipped": [...],
-    "existing": [...]}."""
+    "existing": [...], "items": [{source, output, status, error}]}.
+    "items" carries one row per collected file so a caller can export a
+    manifest without guessing how outputs map back to sources."""
     cp_utils._validate_password_len(password)
     patterns = [p.strip() for p in pattern.split(",") if p.strip()] if pattern else None
     files, skipped = _collect_targets(path, patterns, recursive, for_encrypt=True)
-    encrypted, failed, existing = [], [], []
+    encrypted, failed, existing, items = [], [], [], []
     for f in files:
         out = f + ".enc"
         if os.path.exists(out) and not overwrite:
             existing.append(out)
+            items.append({"source": f, "output": out, "status": "existing", "error": ""})
             continue
         try:
             encrypt_file(f, out, password)
             encrypted.append(out)
+            items.append({"source": f, "output": out, "status": "encrypted", "error": ""})
         except Exception as e:
             failed.append((f, str(e)))
+            items.append({"source": f, "output": out, "status": "failed", "error": str(e)})
+    for s in skipped:
+        items.append({"source": s, "output": "", "status": "skipped", "error": ""})
     return {"encrypted": encrypted, "failed": failed, "skipped": skipped,
-            "existing": existing}
+            "existing": existing, "items": items}
 
 
 def batch_decrypt(path: str, password: str, pattern: Optional[str] = None,
@@ -488,22 +495,26 @@ def batch_decrypt(path: str, password: str, pattern: Optional[str] = None,
     name, so the overwritten targets are reported under "existing" instead of
     being applied silently.
     Returns {"decrypted": [...], "failed": [(path, error)], "skipped": [...],
-    "existing": [...]}."""
+    "existing": [...], "items": [{source, output, status, error}]}."""
     cp_utils._validate_password_len(password)
     patterns = [p.strip() for p in pattern.split(",") if p.strip()] if pattern else None
     files, skipped = _collect_targets(path, patterns, recursive, for_encrypt=False)
-    decrypted, failed, overwritten = [], [], []
+    decrypted, failed, overwritten, items = [], [], [], []
     for f in files:
+        out = get_decrypt_output_path(f)
         try:
-            out = get_decrypt_output_path(f)
             if os.path.exists(out):
                 overwritten.append(out)
             decrypt_file(f, out, password)
             decrypted.append(out)
+            items.append({"source": f, "output": out, "status": "decrypted", "error": ""})
         except Exception as e:
             failed.append((f, str(e)))
+            items.append({"source": f, "output": out, "status": "failed", "error": str(e)})
+    for s in skipped:
+        items.append({"source": s, "output": "", "status": "skipped", "error": ""})
     return {"decrypted": decrypted, "failed": failed, "skipped": skipped,
-            "existing": overwritten}
+            "existing": overwritten, "items": items}
 
 
 def detect_content_type(text: str) -> Tuple[str, Optional[str], Optional[str]]:

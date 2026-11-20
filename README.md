@@ -1,6 +1,6 @@
 # CryptPouch
 
-AES-256 encryption toolbox for local, single-user use. Version 2.11.4.
+AES-256 encryption toolbox for local, single-user use. Version 2.12.0.
 
 Interactive menu and command-line interface, with Chinese and English prompts.
 
@@ -42,6 +42,16 @@ Interactive menu and command-line interface, with Chinese and English prompts.
   swap is serialized, every entry point reports known failures as
   `CryptPouchAPIError` (programming errors stay visible), `get_config()` hands
   back an independent copy, and RSA keys passed as PEM stay in memory
+- Directory packing (v2.12.0): `--pack` turns a whole folder into ONE encrypted
+  volume (a zip built in a temporary file and encrypted with the same $CP4$
+  streaming format); `--unpack` restores it, and every archive entry is checked
+  before anything is written, so a crafted "../../" name cannot escape the target
+- Batch manifests (v2.12.0): `--manifest report.json` writes the status, size and
+  SHA-256 of every item in a batch run, so what a run actually produced can be
+  audited without re-walking the folder
+- Path-or-text routing (v2.12.0): `-e <path>` naming an existing file or
+  directory now encrypts that file instead of the literal string, and says so;
+  `-o` is honoured in text mode instead of being silently ignored
 - Configurable file size cap (`max_file_size`) to protect against accidental processing of huge files (0 = no limit)
 - Atomic decryption output: plaintext is written to a temp file and swapped in only after the tag verifies
 - RSA asymmetric encryption, 2048/3072/4096-bit keys, optional passphrase-protected private key
@@ -68,6 +78,7 @@ re-exports the public symbols; each module has a single responsibility:
 | `cp_crypto.py` | Cipher tools (GCM/CBC/ChaCha20), key derivation, hashing, password strength |
 | `cp_utils.py` | Safe input, password-length checks, permission restriction, decrypt retry |
 | `cp_files.py` | Streaming file encrypt/decrypt (atomic output), batch and re-encrypt helpers |
+| `cp_pack.py` | Directory packing (folder to one encrypted volume) and batch JSON manifests |
 | `cp_admin.py` | Dependency install with consent-gated UAC elevation; password-safe restart |
 
 All modules are part of the same package and share state through `cp_shared`; there
@@ -86,7 +97,7 @@ with `cp_admin` on top).
 | Asymmetric crypto | RSA 2048/3072/4096-bit keys, optional passphrase-protected private key, PKCS1_OAEP |
 | Utilities | Base64, text/file hashing (md5..blake2b), random password generator, strength checker, QR code generate/decode, content type & encoding detection |
 | Configuration | `~/.cryptpouch/config.json` + `CRYPTPOUCH_*` environment variables override defaults (CLI > env > config > defaults); optional `requirements-lock.txt` pins exact dependency versions |
-| Interfaces | Interactive bilingual menu (Chinese/English) and full CLI (`-e/-d/-f/-o/--hash/--lang/--cipher/--password-file`) |
+| Interfaces | Interactive bilingual menu (Chinese/English) and full CLI (`-e/-d/-f/-o/--hash/--lang/--cipher/--password-file/--pack/--unpack/--manifest`) |
 
 ### Typical use cases
 
@@ -146,11 +157,20 @@ python CryptPouch.py -e "hello world" --password-file pass.txt
 # Decrypt text
 python CryptPouch.py -d "<ciphertext>" -p "your password"
 
-# Encrypt a file
-python CryptPouch.py -e path/to/file -f -p "your password"
+# Encrypt a file (naming an existing file is enough; -f is still accepted)
+python CryptPouch.py -e path/to/file -p "your password"
 
 # Decrypt a file
 python CryptPouch.py -d path/to/file.enc -f -o output.txt -p "your password"
+
+# Pack a whole directory into one encrypted volume
+python CryptPouch.py -e path/to/folder --pack -p "your password"
+
+# Restore a packed volume (decrypts and extracts into path/to/folder)
+python CryptPouch.py -d path/to/folder.zip.enc --unpack -p "your password"
+
+# Batch run plus a JSON manifest (status, size and SHA-256 per file)
+python CryptPouch.py -e path/to/folder --manifest report.json -p "your password"
 
 # Compute a file hash
 python CryptPouch.py --hash sha256 path/to/file

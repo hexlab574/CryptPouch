@@ -1,5 +1,21 @@
 # CryptPouch Roadmap
 
+## Released: v2.12.0 (2026-11, usable CLI and two learned features)
+
+Three usability defects, each reproduced on the host before the fix, plus two
+features modeled on mature file-encryption tools (Picocrypt, pyAesCrypt) and
+built with the standard library only, so the zero-dependency rule still holds.
+
+| # | Item | Details |
+| --- | --- | --- |
+| 1 | `-e <file>` no longer encrypts the string | `python CryptPouch.py -e notes.txt -p pw` encrypted the literal text "notes.txt", printed the ciphertext and exited 0: no .enc file appeared, which is the "I encrypted it and there is no output" report. A target naming an existing file or directory is now routed to file mode with a one-line notice; `-f` still works and is no longer required. |
+| 2 | `-o` honoured in text mode | `-e "secret" -o cipher.txt` printed the ciphertext and ignored `-o` while exiting 0. The result is now written to that path (UTF-8, permission-restricted) and the path is printed. |
+| 3 | Directory packing | `-e DIR --pack` builds a zip in a temporary file, encrypts it with the same $CP4$ streaming format and removes the temp file in a finally block; `-d X.zip.enc --unpack` decrypts and extracts. Every archive entry is validated (absolute paths, `..` segments and escapes outside the destination are refused) before anything is written. Menu entries 26 and 27 expose both. |
+| 4 | Batch manifests | `--manifest report.json` records source, output, status, size and SHA-256 per item plus a summary, for batch encrypt and decrypt, including failed runs. |
+| 5 | Explicitly no shredding | Deleting the source after encryption stays a manual step; the tool only prints the reminder. Overwriting a file on an SSD does not erase it (wear leveling), so a "secure delete" button would hand out false assurance; Picocrypt documents the same decision. |
+
+Covered by 15 new tests (128 total).
+
 ## Released: v2.11.4 (2026-11, API layer hardening)
 
 | # | Item | Details |

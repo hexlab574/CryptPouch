@@ -8,7 +8,8 @@ the known security considerations of the project.
 
 The following version series currently receive security support:
 
-- 2.11.x  -  actively supported (latest: 2.11.4)
+- 2.12.x  -  actively supported (latest: 2.12.0)
+- 2.11.x  -  supported (latest: 2.11.4)
 - 2.10.x  -  supported (latest: 2.10.2)
 - 2.9.x  -  supported (latest: 2.9.0)
 - 2.8.x  -  supported (latest: 2.8.0)
@@ -77,6 +78,16 @@ serialized so concurrent calls cannot leave a process permanently muted, RSA
 keys passed as PEM are imported in memory instead of being written to a
 temporary file, and every API entry point reports only known failures. None
 of them changes the security posture above.
+
+v2.12.0 is a usability and feature release on the same primitives. It adds
+directory packing (one encrypted volume per folder) and batch JSON manifests,
+and fixes two CLI traps that both exited 0: a file argument to `-e` was
+encrypted as a literal string (so no .enc file appeared), and `-o` was ignored
+in text mode. Packing writes a plaintext zip to a temporary file for the
+duration of the encryption and removes it in a finally block; unpacking
+validates every archive entry (absolute paths, parent traversal and escapes
+outside the destination are refused) before writing anything. No new cipher
+or key-derivation path is introduced.
 
 All reviews to date are author self-review. There is no third-party or paid
 security audit, and community validation is still limited; treat the
@@ -243,6 +254,27 @@ TOCTOU race in file naming
   local model. Additional hardening since v2.11.0 narrows the window further:
   symlinked inputs are refused by default, and the size cap is re-evaluated on
   the fstat of the already-open handle rather than on a path lookup.
+
+Plaintext zip while packing a directory
+
+- Reason: one encrypted volume per folder is the useful unit when sending or
+  archiving a tree, and a streaming zip avoids holding the whole tree in
+  memory.
+- Mitigation: the zip is created with mkstemp in the system temp directory,
+  encrypted right away, and removed in a finally block, so it does not survive
+  an error or an interrupted run. Its name is random. The window exists only
+  while the volume is being produced, so run packing on the same trust basis
+  as the plaintext itself.
+
+No secure-delete (shred) option
+
+- Reason: overwriting a file does not erase it on SSDs, where wear leveling
+  remaps blocks, and journaling or copy-on-write filesystems can retain the
+  old blocks as well. A shred button would promise something it cannot
+  deliver.
+- Mitigation: after encryption the tool only reminds the user to delete the
+  source once the ciphertext is verified; deletion stays a deliberate manual
+  step.
 
 RSA keys and QR images written next to the script
 
