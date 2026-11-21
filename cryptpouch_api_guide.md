@@ -25,18 +25,20 @@ message.
 ```python
 import cryptpouch_api as cp
 
-# Text encryption/decryption (gcm default / cbc / chacha20)
+# Text encryption/decryption (gcm default / cbc / chacha20 / xchacha20)
 token = cp.encrypt_text("hello world", "my password", mode="gcm")
 cp.decrypt_text(token, "my password")              # -> "hello world" (format auto-detected)
 chacha = cp.encrypt_text("hello", "pwd", mode="chacha20")   # ChaCha20-Poly1305
+xs = cp.encrypt_text("hello", "pwd", mode="xchacha20", secure=True)  # XChaCha20, 256 MiB KDF
 
 # Key rotation: one step (old v2 / old password -> new format / new password)
 new_token = cp.reencrypt_text(token, "my password", "new password", mode="chacha20")
 new_file = cp.reencrypt_file("photo.jpg.enc", "old password", "new password")
 
-# File encryption/decryption (streaming, v3 GCM)
+# File encryption/decryption (streaming; AES-256-GCM by default, or XChaCha20)
 out = cp.encrypt_file("photo.jpg", "my password")        # -> photo.jpg.enc
-back = cp.decrypt_file("photo.jpg.enc", "my password")   # -> photo.jpg
+safe = cp.encrypt_file("vault.bin", "my password", secure=True)   # XChaCha20 + 256 MiB KDF
+back = cp.decrypt_file("photo.jpg.enc", "my password")   # -> photo.jpg (cost read from header)
 
 # Batch encryption/decryption (recursive directory scan + glob filters)
 res = cp.batch_encrypt("docs/", "my password", pattern="*.txt,*.md")
@@ -77,13 +79,13 @@ cp.decode_qr("qr.png")               # ["https://example.com"]
 
 | Function | Description | Returns |
 | --- | --- | --- |
-| `encrypt_text(text, password, mode="gcm")` | Text encryption (gcm/cbc/chacha20) | Base64 ciphertext string |
-| `decrypt_text(ciphertext, password)` | Text decryption (auto-detects GCM/ChaCha20/CBC/legacy formats) | Plaintext string |
-| `encrypt_file(path, password, output_path=None)` | File encryption (streaming) | Output path |
-| `decrypt_file(path, password, output_path=None)` | File decryption | Output path |
-| `reencrypt_text(ciphertext, old_pwd, new_pwd, mode="gcm")` | One-step key rotation / format upgrade (text) | New ciphertext |
+| `encrypt_text(text, password, mode="gcm", secure=False)` | Text encryption (gcm/cbc/chacha20/xchacha20); `secure=True` = 256 MiB Argon2id | Base64 ciphertext string |
+| `decrypt_text(ciphertext, password)` | Text decryption (auto-detects GCM/ChaCha20/XChaCha20/CBC/legacy formats) | Plaintext string |
+| `encrypt_file(path, password, output_path=None, cipher="aes-gcm", secure=False)` | File encryption (streaming; `cipher="xchacha20"`, `secure=True` = high-security KDF) | Output path |
+| `decrypt_file(path, password, output_path=None)` | File decryption (format and KDF cost read from the header) | Output path |
+| `reencrypt_text(ciphertext, old_pwd, new_pwd, mode="gcm")` | One-step key rotation / format upgrade (text; gcm/cbc/chacha20/xchacha20) | New ciphertext |
 | `reencrypt_file(path, old_pwd, new_pwd, output_path=None)` | One-step key rotation / format upgrade (file) | Output path |
-| `batch_encrypt(path, password, pattern=None, recursive=True)` | Batch encryption (recursive + glob filter) | `{"encrypted", "failed"}` |
+| `batch_encrypt(path, password, pattern=None, recursive=True, cipher="aes-gcm", secure=False)` | Batch encryption (recursive + glob filter) | `{"encrypted", "failed"}` |
 | `batch_decrypt(path, password, pattern=None, recursive=True)` | Batch decryption | `{"decrypted", "failed"}` |
 | `get_config()` | Read effective config (config.json + environment) | Config dict |
 | `set_config(reload=False, config_path=None, **kwargs)` | Validate, merge and atomically write config.json; `reload=True` refreshes the process immediately | Config dict |

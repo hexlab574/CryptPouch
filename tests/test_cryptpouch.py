@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for CryptPouch v2.12.0.
+"""Unit tests for CryptPouch v2.13.0.
 
 Run from the CryptPouch package directory:
     python -m unittest discover -s tests -v
@@ -691,7 +691,7 @@ class MemoryHygieneTest(unittest.TestCase):
         self.assertEqual(data, b"0123456789")
 
     def test_version_is_2120(self):
-        self.assertIn("Version: 2.12.0", cp.__doc__)
+        self.assertIn("Version: 2.13.0", cp.__doc__)
 
 
 class AutoDecryptRetryTest(unittest.TestCase):

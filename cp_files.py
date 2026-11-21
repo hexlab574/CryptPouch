@@ -131,12 +131,180 @@ def _audited(action: str):
     return decorator
 
 
+def _encrypt_file_xchacha20(input_path: str, output_path: str, password: str,
+                            secure: bool = False):
+    """Streaming XChaCha20-Poly1305 encryption into the $XS1$ format.
+
+    Layout: prefix | kdf(6) | salt(16) | nonce(24) | ciphertext | tag(16)
+    with prefix+kdf+salt+nonce feeding the AEAD as associated data."""
+    from Crypto.Cipher import ChaCha20_Poly1305
+    from Crypto.Random import get_random_bytes
+
+    try:
+        size = os.path.getsize(input_path)
+    except OSError:
+        size = 0
+    if size > cp_shared.XCHACHA_MAX_FILE_SIZE:
+        raise ValueError(cp_shared.i18n.t("err_xchacha_too_large"))
+
+    params = cp_crypto.resolve_kdf_params(secure)
+    salt = get_random_bytes(cp_shared.ARGON2_SALT_SIZE)
+    nonce = get_random_bytes(cp_shared.XCHACHA_NONCE_SIZE)
+    header = (cp_shared.PREFIX_XCHACHA20 + cp_crypto.encode_kdf_header(params)
+              + salt + nonce)
+    key = bytearray(cp_crypto.derive_argon2_key(password, salt, **params))
+    cipher = ChaCha20_Poly1305.new(key=bytes(key), nonce=nonce)
+    cipher.update(header)
+    cp_crypto._wipe_memory(key)
+
+    show_progress = size > cp_shared.PROGRESS_THRESHOLD
+    try:
+        with open(input_path, "rb") as f_in, open(output_path, "wb") as f_out:
+            actual_size = os.fstat(f_in.fileno()).st_size
+            _check_open_size(actual_size)
+            if actual_size > cp_shared.XCHACHA_MAX_FILE_SIZE:
+                raise ValueError(cp_shared.i18n.t("err_xchacha_too_large"))
+            if actual_size != size:
+                size = actual_size
+                show_progress = size > cp_shared.PROGRESS_THRESHOLD
+            f_out.write(header)
+            read_size = 0
+            next_report = 0.0
+            while True:
+                chunk = f_in.read(cp_shared.CHUNK_SIZE)
+                if not chunk:
+                    break
+                f_out.write(cipher.encrypt(chunk))
+                read_size += len(chunk)
+                if show_progress:
+                    now = time.monotonic()
+                    if now >= next_report:
+                        percent = read_size / size * 100 if size else 100
+                        print(f"\rProgress: {percent:.1f}%", end="", flush=True)
+                        next_report = now + cp_shared.PROGRESS_MIN_INTERVAL
+            if show_progress:
+                print("\rProgress: 100.0%", end="", flush=True)
+            f_out.write(cipher.digest())
+            f_out.flush()
+            os.fsync(f_out.fileno())
+    except Exception:
+        try:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+        except OSError:
+            pass
+        raise
+
+    if show_progress:
+        print()
+    cp_utils._restrict_permissions(output_path)
+
+
+def _decrypt_file_xchacha20(f_in, output_path: str, password: str, file_size: int):
+    """Decrypt a $XS1$ volume already positioned after the prefix."""
+    from Crypto.Cipher import ChaCha20_Poly1305
+
+    fixed = (cp_shared.KDF_HEADER_SIZE + cp_shared.ARGON2_SALT_SIZE
+             + cp_shared.XCHACHA_NONCE_SIZE)
+    if file_size < len(cp_shared.PREFIX_XCHACHA20) + fixed + cp_shared.TAG_SIZE:
+        raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_len_invalid"))
+
+    body = f_in.read(fixed)
+    if len(body) != fixed:
+        raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_len_invalid"))
+    try:
+        params = cp_crypto.decode_kdf_header(body[:cp_shared.KDF_HEADER_SIZE])
+    except ValueError:
+        raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_kdf_header"))
+    salt = body[cp_shared.KDF_HEADER_SIZE:cp_shared.KDF_HEADER_SIZE + cp_shared.ARGON2_SALT_SIZE]
+    nonce = body[cp_shared.KDF_HEADER_SIZE + cp_shared.ARGON2_SALT_SIZE:fixed]
+    header = cp_shared.PREFIX_XCHACHA20 + body
+
+    key = bytearray(cp_crypto.derive_argon2_key(password, salt, **params))
+    cipher = ChaCha20_Poly1305.new(key=bytes(key), nonce=nonce)
+    cipher.update(header)
+    cp_crypto._wipe_memory(key)
+
+    data_len = file_size - len(cp_shared.PREFIX_XCHACHA20) - fixed - cp_shared.TAG_SIZE
+    show_progress = file_size > cp_shared.PROGRESS_THRESHOLD
+    tmp_fd = None
+    tmp_path = None
+    try:
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            prefix=os.path.basename(output_path) + ".", suffix=".cryptpouch.tmp",
+            dir=os.path.dirname(os.path.abspath(output_path)) or ".")
+        with os.fdopen(tmp_fd, "wb") as f_out:
+            tmp_fd = None
+            remaining = data_len
+            read_size = 0
+            next_report = 0.0
+            while remaining > 0:
+                chunk = f_in.read(min(cp_shared.CHUNK_SIZE, remaining))
+                if not chunk:
+                    raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_len_invalid"))
+                f_out.write(cipher.decrypt(chunk))
+                read_size += len(chunk)
+                remaining -= len(chunk)
+                if show_progress:
+                    now = time.monotonic()
+                    if now >= next_report:
+                        percent = read_size / data_len * 100 if data_len else 100
+                        print(f"\rProgress: {percent:.1f}%", end="", flush=True)
+                        next_report = now + cp_shared.PROGRESS_MIN_INTERVAL
+            if show_progress:
+                print("\rProgress: 100.0%", end="", flush=True)
+            tag = f_in.read(cp_shared.TAG_SIZE)
+            if len(tag) != cp_shared.TAG_SIZE:
+                raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_len_invalid"))
+            try:
+                cipher.verify(tag)
+            except ValueError:
+                raise cp_shared.PasswordError(cp_shared.i18n.t("err_pwd_or_file_tamper"))
+            f_out.flush()
+            os.fsync(f_out.fileno())
+        os.replace(tmp_path, output_path)
+        tmp_path = None
+        _fsync_dir(os.path.dirname(os.path.abspath(output_path)) or ".")
+    except Exception:
+        if tmp_fd is not None:
+            try:
+                os.close(tmp_fd)
+            except OSError:
+                pass
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
+    finally:
+        if show_progress:
+            print()
+    cp_utils._restrict_permissions(output_path)
+
+
 @_audited("encrypt")
-def encrypt_file(input_path: str, output_path: str, password: str):
+def encrypt_file(input_path: str, output_path: str, password: str,
+                 cipher: str = "aes-gcm", secure: bool = False):
     """v4 streaming encryption: $CP4$ + Argon2id + AES-256-GCM with the header
     (prefix + salt + nonce) bound as associated data; the tag is written at the
-    end of the file."""
+    end of the file.
+
+    cipher="xchacha20" selects the $XS1$ format instead: XChaCha20-Poly1305
+    with a 24-byte nonce and the Argon2id cost written into the header.
+    secure=True picks the high-security Argon2id preset for that format.
+    """
     cp_utils._validate_password_len(password)
+    _reject_symlink(input_path)
+    _reject_symlink(output_path)
+    _ensure_distinct_paths(input_path, output_path)
+    _check_file_size(input_path)
+
+    if cipher == "xchacha20":
+        return _encrypt_file_xchacha20(input_path, output_path, password, secure)
+    if cipher not in ("aes-gcm", "gcm"):
+        raise ValueError(cp_shared.i18n.t("err_cipher_mode"))
+
     from Crypto.Cipher import AES
     from Crypto.Random import get_random_bytes
 
@@ -225,6 +393,9 @@ def decrypt_file(input_path: str, output_path: str, password: str):
         file_size = os.fstat(f_in.fileno()).st_size
         _check_open_size(file_size)
         header = f_in.read(len(cp_shared.PREFIX_AES_V4))
+
+        if header == cp_shared.PREFIX_XCHACHA20:
+            return _decrypt_file_xchacha20(f_in, output_path, password, file_size)
 
         if header in (cp_shared.PREFIX_AES_V4, cp_shared.PREFIX_AES_V3):
             authenticated = header == cp_shared.PREFIX_AES_V4
@@ -361,13 +532,16 @@ def next_available_copy_name(target_path: str) -> str:
         i += 1
 
 
-def _encrypt_text_with_mode(plain_text: str, password: str, mode: str = "gcm") -> str:
+def _encrypt_text_with_mode(plain_text: str, password: str, mode: str = "gcm",
+                            secure: bool = False) -> str:
     if mode == "gcm":
         return cp_crypto.AESGCMTool(password).encrypt(plain_text)
     if mode == "cbc":
         return cp_crypto.AESCBCWithHMACTool(password).encrypt(plain_text)
     if mode == "chacha20":
         return cp_crypto.ChaCha20Poly1305Tool(password).encrypt(plain_text)
+    if mode == "xchacha20":
+        return cp_crypto.XChaCha20Poly1305Tool(password, secure=secure).encrypt(plain_text)
     raise ValueError(cp_shared.i18n.t("err_cipher_mode"))
 
 
@@ -452,7 +626,8 @@ def _collect_targets(input_path: str, patterns: Optional[List[str]],
 
 
 def batch_encrypt(path: str, password: str, pattern: Optional[str] = None,
-                  recursive: bool = True, overwrite: bool = False) -> dict:
+                  recursive: bool = True, overwrite: bool = False,
+                  cipher: str = "aes-gcm", secure: bool = False) -> dict:
     """Encrypt every collected file in place as <file>.enc.
 
     An existing <file>.enc is kept by default and reported under "existing":
@@ -475,7 +650,7 @@ def batch_encrypt(path: str, password: str, pattern: Optional[str] = None,
             items.append({"source": f, "output": out, "status": "existing", "error": ""})
             continue
         try:
-            encrypt_file(f, out, password)
+            encrypt_file(f, out, password, cipher=cipher, secure=secure)
             encrypted.append(out)
             items.append({"source": f, "output": out, "status": "encrypted", "error": ""})
         except Exception as e:
@@ -615,6 +790,8 @@ def _try_text_decrypt_family(enc_str: str, pwd: str) -> Tuple[str, str]:
     the wrong family. Prefixless legacy ciphertext falls back to the GCM then CBC
     compatibility matrices."""
     pack = _peek_pack_prefix(enc_str)
+    if pack.startswith(cp_shared.PREFIX_XCHACHA20):
+        return cp_crypto.XChaCha20Poly1305Tool(pwd).decrypt(enc_str), "xchacha20"
     if pack.startswith((cp_shared.PREFIX_CHACHA20_V2, cp_shared.PREFIX_CHACHA20)):
         return cp_crypto.ChaCha20Poly1305Tool(pwd).decrypt(enc_str), "chacha20"
     if pack.startswith((cp_shared.PREFIX_AES_CBC_V3, cp_shared.PREFIX_AES_CBC_V2)):
@@ -653,7 +830,8 @@ def _try_all_aes_decrypt(enc_str: str):
         except Exception as e:
             cp_utils._handle_unexpected_error(e)
             return
-        ok_key = {"gcm": "auto_gcm_ok", "cbc": "auto_cbc_ok", "chacha20": "auto_chacha_ok"}[family]
+        ok_key = {"gcm": "auto_gcm_ok", "cbc": "auto_cbc_ok", "chacha20": "auto_chacha_ok",
+                  "xchacha20": "xchacha_decrypted"}[family]
         cp_shared.printer.ok(cp_shared.i18n.t(ok_key))
         print(plain)
         return

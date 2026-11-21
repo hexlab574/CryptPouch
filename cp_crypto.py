@@ -76,18 +76,56 @@ def derive_key(password: str, salt: bytes, iterations: int = cp_shared.DEFAULT_I
     )
 
 
-def derive_argon2_key(password: str, salt: bytes) -> bytes:
-    """Argon2id key derivation (memory-hard, resistant to GPU/ASIC parallel cracking)."""
+def derive_argon2_key(password: str, salt: bytes, time_cost: Optional[int] = None,
+                      memory_kib: Optional[int] = None,
+                      parallelism: Optional[int] = None) -> bytes:
+    """Argon2id key derivation (memory-hard, resistant to GPU/ASIC parallel cracking).
+
+    The three cost parameters default to the process-wide configuration. A
+    caller that reads them from a volume header passes them explicitly, so a
+    volume always decrypts with the cost it was created with.
+    """
     from argon2.low_level import hash_secret_raw, Type
     return hash_secret_raw(
         secret=password.encode("utf-8"),
         salt=salt,
-        time_cost=cp_shared.ARGON2_TIME_COST,
-        memory_cost=cp_shared.ARGON2_MEMORY_COST_KIB,
-        parallelism=cp_shared.ARGON2_PARALLELISM,
+        time_cost=cp_shared.ARGON2_TIME_COST if time_cost is None else int(time_cost),
+        memory_cost=cp_shared.ARGON2_MEMORY_COST_KIB if memory_kib is None else int(memory_kib),
+        parallelism=cp_shared.ARGON2_PARALLELISM if parallelism is None else int(parallelism),
         hash_len=cp_shared.ARGON2_HASH_LEN,
         type=Type.ID
     )
+
+
+def resolve_kdf_params(secure: bool = False) -> dict:
+    """Argon2id settings for a NEW volume: the configured default or the high preset."""
+    if secure:
+        return dict(cp_shared.HIGH_SECURITY_KDF)
+    return {"time_cost": cp_shared.ARGON2_TIME_COST,
+            "memory_kib": cp_shared.ARGON2_MEMORY_COST_KIB,
+            "parallelism": cp_shared.ARGON2_PARALLELISM}
+
+
+def encode_kdf_header(params: dict) -> bytes:
+    """Pack the cost parameters into the fixed 6-byte header field."""
+    import struct
+    return struct.pack(">IBB", int(params["memory_kib"]), int(params["time_cost"]),
+                       int(params["parallelism"]))
+
+
+def decode_kdf_header(raw: bytes) -> dict:
+    """Parse a header-supplied cost. Out-of-range values are refused before any
+    derivation runs: a forged header asking for 4 TiB would otherwise turn a
+    tiny volume into a memory bomb."""
+    import struct
+    if len(raw) != cp_shared.KDF_HEADER_SIZE:
+        raise ValueError(cp_shared.i18n.t("err_kdf_header"))
+    memory_kib, time_cost, parallelism = struct.unpack(">IBB", raw)
+    if not (cp_shared.KDF_MEMORY_MIN_KIB <= memory_kib <= cp_shared.KDF_MEMORY_MAX_KIB
+            and 1 <= time_cost <= cp_shared.KDF_TIME_MAX
+            and 1 <= parallelism <= cp_shared.KDF_PARALLELISM_MAX):
+        raise ValueError(cp_shared.i18n.t("err_kdf_header"))
+    return {"memory_kib": memory_kib, "time_cost": time_cost, "parallelism": parallelism}
 
 
 def _cbc_derive_key_pair(password: str, salt: bytes, iterations: int = cp_shared.DEFAULT_ITERATIONS):
@@ -484,6 +522,77 @@ class ChaCha20Poly1305Tool:
             _wipe_memory(key)
         if not authenticated:
             _note_legacy_format()
+        return cp_utils._decode_with_hint(raw)
+
+
+class XChaCha20Poly1305Tool:
+    """XChaCha20-Poly1305 AEAD with a self-describing Argon2id header ($XS1$).
+
+    Two things this format adds over $CC2$ (ChaCha20-Poly1305, 12-byte nonce):
+    the 24-byte nonce makes a random-nonce collision negligible even at very
+    high volume (the 96-bit RFC 8439 nonce is the part that has to be watched
+    once millions of volumes exist), and the Argon2id cost parameters travel
+    inside the authenticated header, so a volume always decrypts with the cost
+    it was created with, even after the process-wide defaults change.
+    """
+
+    def __init__(self, password: str, secure: bool = False):
+        cp_utils._validate_password_len(password)
+        self.password = password
+        self.secure = secure
+
+    def encrypt(self, plain_text: str) -> str:
+        from Crypto.Cipher import ChaCha20_Poly1305
+        from Crypto.Random import get_random_bytes
+
+        params = resolve_kdf_params(self.secure)
+        salt = get_random_bytes(cp_shared.ARGON2_SALT_SIZE)
+        nonce = get_random_bytes(cp_shared.XCHACHA_NONCE_SIZE)
+        header = cp_shared.PREFIX_XCHACHA20 + encode_kdf_header(params) + salt + nonce
+        key = bytearray(derive_argon2_key(self.password, salt, **params))
+        try:
+            cipher = ChaCha20_Poly1305.new(key=bytes(key), nonce=nonce)
+            cipher.update(header)
+            ciphertext, tag = cipher.encrypt_and_digest(plain_text.encode("utf-8"))
+        finally:
+            _wipe_memory(key)
+        return base64.b64encode(header + tag + ciphertext).decode("utf-8")
+
+    def decrypt(self, b64_str: str) -> str:
+        from Crypto.Cipher import ChaCha20_Poly1305
+
+        try:
+            pack = cp_utils._decode_pack_b64(b64_str)
+        except base64.binascii.Error:
+            raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_b64_corrupted"))
+
+        prefix = cp_shared.PREFIX_XCHACHA20
+        fixed = cp_shared.KDF_HEADER_SIZE + cp_shared.ARGON2_SALT_SIZE + cp_shared.XCHACHA_NONCE_SIZE
+        if len(pack) < len(prefix) + fixed + cp_shared.TAG_SIZE:
+            raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_len_invalid"))
+        if not pack.startswith(prefix):
+            raise cp_shared.PasswordError(cp_shared.i18n.t("err_pwd_or_tamper"))
+
+        body = pack[len(prefix):]
+        try:
+            params = decode_kdf_header(body[:cp_shared.KDF_HEADER_SIZE])
+        except ValueError:
+            raise cp_shared.CipherCorruptedError(cp_shared.i18n.t("err_kdf_header"))
+        salt = body[cp_shared.KDF_HEADER_SIZE:cp_shared.KDF_HEADER_SIZE + cp_shared.ARGON2_SALT_SIZE]
+        nonce = body[cp_shared.KDF_HEADER_SIZE + cp_shared.ARGON2_SALT_SIZE:fixed]
+        header = pack[:len(prefix) + fixed]
+        tag = body[fixed:fixed + cp_shared.TAG_SIZE]
+        ciphertext = body[fixed + cp_shared.TAG_SIZE:]
+
+        key = bytearray(derive_argon2_key(self.password, salt, **params))
+        try:
+            cipher = ChaCha20_Poly1305.new(key=bytes(key), nonce=nonce)
+            cipher.update(header)
+            raw = cipher.decrypt_and_verify(ciphertext, tag)
+        except ValueError:
+            raise cp_shared.PasswordError(cp_shared.i18n.t("err_pwd_or_tamper"))
+        finally:
+            _wipe_memory(key)
         return cp_utils._decode_with_hint(raw)
 
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""CryptPouch v2.12.0 - AES256 encryption toolbox (interactive menu + CLI).
-Version: 2.12.0
+"""CryptPouch v2.13.0 - AES256 encryption toolbox (interactive menu + CLI).
+Version: 2.13.0
 License: MIT
 Note: For learning, research and personal local use only.
 
@@ -70,6 +70,10 @@ def show_menu():
     print("25. 批量解密（目录/文件）" if cp_shared.i18n.lang == "zh" else "25. Batch Decrypt (dir/file)")
     print("26. %s" % cp_shared.i18n.t("pack_menu_encrypt"))
     print("27. %s" % cp_shared.i18n.t("pack_menu_decrypt"))
+    print("28. %s" % cp_shared.i18n.t("menu_xchacha_encrypt"))
+    print("29. %s" % cp_shared.i18n.t("menu_xchacha_decrypt"))
+    print("30. %s" % cp_shared.i18n.t("menu_secure_encrypt"))
+    print("31. %s" % cp_shared.i18n.t("menu_secure_decrypt"))
     print("0. 退出" if cp_shared.i18n.lang == "zh" else "0. Exit")
 
 
@@ -484,6 +488,110 @@ def menu_loop():
                 except Exception as e:
                     cp_utils._handle_unexpected_error(e)
 
+            elif choice == "28":
+                pwd = cp_utils.get_password_with_confirm("encrypt_pwd")
+                content = cp_utils._safe_input(cp_shared.i18n.t("input_plain"))
+                try:
+                    result = cp_crypto.XChaCha20Poly1305Tool(pwd).encrypt(content)
+                except (cp_shared.CryptoToolError, ValueError, OSError, UnicodeError) as e:
+                    cp_shared.printer.fail(str(e))
+                    continue
+                except Exception as e:
+                    cp_utils._handle_unexpected_error(e)
+                    continue
+                cp_shared.printer.ok(cp_shared.i18n.t("xchacha_encrypted"))
+                print(result)
+                cp_utils.copy_to_clipboard(result)
+
+            elif choice == "29":
+                enc_str = cp_utils._safe_input(cp_shared.i18n.t("input_cipher"))
+                cp_utils._text_decrypt_with_retry(lambda pwd: cp_crypto.XChaCha20Poly1305Tool(pwd).decrypt(enc_str))
+
+            elif choice == "30":
+                target = cp_crypto.normalize_path(cp_utils._safe_input(cp_shared.i18n.t("batch_path_prompt")))
+                if os.path.isdir(target):
+                    pwd = cp_utils.get_password_with_confirm("encrypt_pwd")
+                    try:
+                        result = cp_files.batch_encrypt(target, pwd, cipher="xchacha20", secure=True)
+                        cp_shared.printer.ok(cp_shared.i18n.t("batch_encrypted_n", n=len(result["encrypted"])))
+                        print(cp_shared.i18n.t("batch_summary", ok=len(result["encrypted"]),
+                                               failed=len(result["failed"]),
+                                               skipped=len(result.get("skipped", []))))
+                        for path, err in result["failed"]:
+                            cp_shared.printer.fail(f"{path}: {err}")
+                        if result["encrypted"]:
+                            cp_shared.printer.warn(cp_shared.i18n.t("batch_keep_source_hint"))
+                        cp_shared.printer.info(cp_shared.i18n.t("secure_hint"))
+                    except (cp_shared.CryptoToolError, ValueError, OSError, UnicodeError) as e:
+                        cp_shared.printer.fail(str(e))
+                    except Exception as e:
+                        cp_utils._handle_unexpected_error(e)
+                    continue
+                if not os.path.isfile(target):
+                    cp_shared.printer.fail(cp_shared.i18n.t("file_not_exist"))
+                    continue
+                pwd = cp_utils.get_password_with_confirm("encrypt_pwd")
+                output_path = target + ".enc"
+                if os.path.exists(output_path):
+                    ans = cp_utils._safe_input(cp_shared.i18n.t("overwrite_confirm")).strip().lower()
+                    if ans != "y":
+                        cp_shared.printer.warn(cp_shared.i18n.t("encrypt_exists_skip") + " " + output_path)
+                        continue
+                try:
+                    cp_files.encrypt_file(target, output_path, pwd, cipher="xchacha20", secure=True)
+                    cp_shared.printer.ok(cp_shared.i18n.t("secure_file_encrypted", path=output_path))
+                    cp_shared.printer.info(cp_shared.i18n.t("secure_hint"))
+                except (cp_shared.CryptoToolError, ValueError, OSError, UnicodeError) as e:
+                    cp_shared.printer.fail(str(e))
+                except Exception as e:
+                    cp_utils._handle_unexpected_error(e)
+
+            elif choice == "31":
+                target = cp_crypto.normalize_path(cp_utils._safe_input(cp_shared.i18n.t("batch_path_prompt")))
+                if os.path.isdir(target):
+                    pwd = getpass.getpass(cp_shared.i18n.t("decrypt_pwd"))
+                    try:
+                        result = cp_files.batch_decrypt(target, pwd)
+                        cp_shared.printer.ok(cp_shared.i18n.t("batch_decrypted_n", n=len(result["decrypted"])))
+                        print(cp_shared.i18n.t("batch_summary", ok=len(result["decrypted"]),
+                                               failed=len(result["failed"]),
+                                               skipped=len(result.get("skipped", []))))
+                        if result.get("existing"):
+                            print(cp_shared.i18n.t("batch_overwritten_n", n=len(result["existing"])))
+                        for path, err in result["failed"]:
+                            cp_shared.printer.fail(f"{path}: {err}")
+                    except (cp_shared.CryptoToolError, ValueError, OSError, UnicodeError) as e:
+                        cp_shared.printer.fail(str(e))
+                    except Exception as e:
+                        cp_utils._handle_unexpected_error(e)
+                    continue
+                if not os.path.isfile(target):
+                    cp_shared.printer.fail(cp_shared.i18n.t("file_not_exist"))
+                    continue
+                output_path = cp_files.get_decrypt_output_path(target)
+                if os.path.exists(output_path):
+                    confirm = cp_utils._safe_input(cp_shared.i18n.t("target_exists")).strip().lower()
+                    if confirm != "y":
+                        output_path = cp_files.next_available_copy_name(output_path)
+                        cp_shared.printer.warn(cp_shared.i18n.t("kept_original") + f" {output_path}")
+                for i in range(cp_shared.MAX_PASSWORD_ATTEMPTS):
+                    pwd = getpass.getpass(cp_shared.i18n.t("decrypt_pwd"))
+                    try:
+                        cp_files.decrypt_file(target, output_path, pwd)
+                    except (cp_shared.PasswordError, cp_shared.CipherCorruptedError) as e:
+                        cp_shared.printer.fail(str(e))
+                        if i < cp_shared.MAX_PASSWORD_ATTEMPTS - 1:
+                            cp_shared.printer.warn(cp_shared.i18n.t("attempts_left", left=cp_shared.MAX_PASSWORD_ATTEMPTS - i - 1))
+                        continue
+                    except (cp_shared.CryptoToolError, ValueError, OSError, UnicodeError) as e:
+                        cp_shared.printer.fail(str(e))
+                        break
+                    except Exception as e:
+                        cp_utils._handle_unexpected_error(e)
+                        break
+                    cp_shared.printer.ok(cp_shared.i18n.t("secure_file_decrypted", path=output_path))
+                    break
+
             elif choice == "0":
                 confirm = cp_utils._safe_input(cp_shared.i18n.t("exit_confirm")).strip().lower()
                 if confirm == "y":
@@ -509,6 +617,18 @@ def menu_loop():
             cp_utils._handle_unexpected_error(e)
 
 
+def _file_cipher(args) -> str:
+    """Pick the file encryption format from the CLI flags.
+
+    --secure implies the XChaCha20-Poly1305 format ($XS1$, which carries its own
+    Argon2id cost in the header); --cipher=xchacha20 selects the same format at
+    the standard cost. Everything else keeps the historical AES-256-GCM ($CP4$)
+    format, so existing scripts behave exactly as before."""
+    if getattr(args, "secure", False) or getattr(args, "cipher", "gcm") == "xchacha20":
+        return "xchacha20"
+    return "aes-gcm"
+
+
 def cli_mode():
     # Pre-parse --lang so the help text follows the selected language
     # (default comes from the user config / CRYPTPOUCH_LANG when set)
@@ -519,6 +639,9 @@ def cli_mode():
     global i18n, printer
     i18n = cp_shared.I18n(ns.lang)
     printer = cp_shared.Printer(i18n)
+    # Single source of truth: every module and the menu read cp_shared.i18n.
+    cp_shared.i18n = i18n
+    cp_shared.printer = printer
 
     parser = argparse.ArgumentParser(description=i18n.t("cli_desc"))
     parser.add_argument("-e", "--encrypt", help=i18n.t("cli_e_help"))
@@ -532,9 +655,11 @@ def cli_mode():
     parser.add_argument("--pack", action="store_true", help=i18n.t("cli_pack_help"))
     parser.add_argument("--unpack", action="store_true", help=i18n.t("cli_unpack_help"))
     parser.add_argument("--manifest", help=i18n.t("cli_manifest_help"))
-    parser.add_argument("--cipher", choices=list(cp_shared.CIPHER_MODES), default="gcm", help=i18n.t("cli_cipher_help"))
+    parser.add_argument("--cipher", choices=["gcm", "cbc", "chacha20", "xchacha20"],
+                        default="gcm", help=i18n.t("cli_cipher_help"))
+    parser.add_argument("--secure", action="store_true", help=i18n.t("cli_secure_help"))
     parser.add_argument("--lang", choices=["zh", "en"], default=cp_shared.CONFIG.get("lang") or "zh", help=i18n.t("cli_lang_help"))
-    parser.add_argument("--version", action="version", version="2.12.0")
+    parser.add_argument("--version", action="version", version="2.13.0")
 
     args = parser.parse_args()
 
@@ -620,7 +745,7 @@ def cli_mode():
             if not args.manifest:
                 return
             try:
-                report = cp_pack.build_manifest(items, operation, tool_version="2.12.0")
+                report = cp_pack.build_manifest(items, operation, tool_version="2.13.0")
                 path = cp_pack.write_manifest(report, args.manifest)
                 printer.ok(i18n.t("manifest_written", path=path, n=len(report["items"])))
             except (OSError, ValueError) as e:
@@ -644,7 +769,8 @@ def cli_mode():
                 if not os.path.isdir(norm_target):
                     printer.fail(i18n.t("pack_not_dir", path=norm_target))
                     sys.exit(2)
-                res = cp_pack.pack_encrypt(norm_target, pwd, args.output, overwrite=args.overwrite)
+                res = cp_pack.pack_encrypt(norm_target, pwd, args.output, overwrite=args.overwrite,
+                                           cipher=_file_cipher(args), secure=args.secure)
                 printer.ok(i18n.t("pack_encrypted", n=res["files"], path=res["output"]))
                 printer.warn(i18n.t("batch_keep_source_hint"))
                 sys.exit(0)
@@ -658,7 +784,8 @@ def cli_mode():
                 # A folder passed with -f used to be rejected outright, which made
                 # whole file classes look unsupported. Process the tree instead.
                 if args.encrypt:
-                    res = cp_files.batch_encrypt(norm_target, pwd, overwrite=args.overwrite)
+                    res = cp_files.batch_encrypt(norm_target, pwd, overwrite=args.overwrite,
+                                                 cipher=_file_cipher(args), secure=args.secure)
                     printer.ok(i18n.t("batch_encrypted_n", n=len(res["encrypted"])))
                     print(i18n.t("batch_summary", ok=len(res["encrypted"]),
                                  failed=len(res["failed"]),
@@ -691,8 +818,10 @@ def cli_mode():
                         # name, so the folder looked unchanged after a real run.
                         printer.warn(i18n.t("encrypt_exists_skip") + " " + out)
                     else:
-                        cp_files.encrypt_file(target, out, pwd)
+                        cp_files.encrypt_file(target, out, pwd, cipher=_file_cipher(args), secure=args.secure)
                         printer.ok(i18n.t("cli_file_encrypted"))
+                        if args.secure:
+                            printer.info(i18n.t("secure_hint"))
                         _emit_manifest([{"source": target, "output": out,
                                          "status": "encrypted", "error": ""}], "encrypt")
                 else:
@@ -715,7 +844,11 @@ def cli_mode():
                 # to the screen and nothing was written, while the exit status
                 # stayed 0. Honour it now that the target is known to be text.
                 if args.encrypt:
-                    result = cp_files._encrypt_text_with_mode(target, pwd, args.cipher)
+                    # --secure means the XChaCha20 format for text as well: AES-GCM
+                    # has no high-security cost tier, so selecting it silently would
+                    # hand the user a standard-strength payload they did not ask for.
+                    text_mode = "xchacha20" if args.secure else args.cipher
+                    result = cp_files._encrypt_text_with_mode(target, pwd, text_mode, secure=args.secure)
                 else:
                     result = cp_files.try_text_decrypt(target, pwd)
                 if args.output:
@@ -756,6 +889,11 @@ def main():
     lang = cp_shared.CONFIG.get("lang") or select_language()
     i18n = cp_shared.I18n(lang)
     printer = cp_shared.Printer(i18n)
+    # The menu and cp_files/cp_utils read cp_shared.i18n, so the choice has to be
+    # published there too; leaving it at the import-time default made a menu run
+    # stay in Chinese even when config.json or CRYPTPOUCH_LANG said "en".
+    cp_shared.i18n = i18n
+    cp_shared.printer = printer
 
     printer.info(i18n.t("welcome"))
     printer.info(i18n.t("usage_tip"))

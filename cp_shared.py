@@ -458,8 +458,8 @@ LANG = {
         "analyze_try_decrypt": "是否尝试解密？(y/n)：",
         "analyze_type_chacha20": "类型：ChaCha20-Poly1305 加密密文（CryptPouch 格式）",
         "auto_chacha_ok": "ChaCha20-Poly1305 解密成功",
-        "err_cipher_mode": "不支持的加密算法（gcm/cbc/chacha20）",
-        "cli_cipher_help": "加密算法：gcm/cbc/chacha20（默认 gcm）",
+        "err_cipher_mode": "不支持的加密算法（gcm/cbc/chacha20/xchacha20）",
+        "cli_cipher_help": "加密算法：gcm/cbc/chacha20/xchacha20（默认 gcm）",
         "reencrypt_old_pwd": "请输入旧密码：",
         "reencrypt_new_pwd": "请输入新密码：",
         "reencrypt_mode_prompt": "目标格式（gcm/cbc/chacha20，回车默认 gcm）：",
@@ -501,6 +501,18 @@ LANG = {
         "cli_auto_file_mode": "检测到已存在的{kind}，已按文件模式处理（无需再加 -f）",
         "cli_text_written": "结果已写入 {path}",
         "manifest_written": "结果清单已写入 {path}（{n} 项）",
+        "cli_secure_help": "高安全模式：XChaCha20-Poly1305 + Argon2id 256 MiB / 4 轮 / 4 线程",
+        "secure_hint": "高安全模式：XChaCha20-Poly1305（24 字节随机 nonce）+ Argon2id 256 MiB / 4 轮 / 4 线程",
+        "menu_xchacha_encrypt": "XChaCha20-Poly1305 加密（文本）",
+        "menu_xchacha_decrypt": "XChaCha20-Poly1305 解密（文本）",
+        "menu_secure_encrypt": "高安全模式加密（文件/目录）",
+        "menu_secure_decrypt": "高安全模式解密（文件/目录）",
+        "err_xchacha_too_large": "文件超过 200 GiB，超出 XChaCha20 单密钥可用范围，已拒绝",
+        "err_kdf_header": "卷头的 Argon2 参数非法（头部损坏或被人为篡改）",
+        "xchacha_encrypted": "XChaCha20-Poly1305 加密完成",
+        "xchacha_decrypted": "XChaCha20-Poly1305 解密完成",
+        "secure_file_encrypted": "高安全模式加密完成：{path}",
+        "secure_file_decrypted": "高安全模式解密完成，已保存到 {path}",
     },
     "en": {
         "welcome": "Hi there! Welcome to the AES256 Crypto Toolkit ",
@@ -635,8 +647,8 @@ LANG = {
         "analyze_try_decrypt": "Try to decrypt? (y/n): ",
         "analyze_type_chacha20": "Type: ChaCha20-Poly1305 encrypted (CryptPouch format)",
         "auto_chacha_ok": "ChaCha20-Poly1305 decrypted",
-        "err_cipher_mode": "Unsupported cipher mode (gcm/cbc/chacha20)",
-        "cli_cipher_help": "Cipher: gcm/cbc/chacha20 (default gcm)",
+        "err_cipher_mode": "Unsupported cipher mode (gcm/cbc/chacha20/xchacha20)",
+        "cli_cipher_help": "Cipher: gcm/cbc/chacha20/xchacha20 (default gcm)",
         "reencrypt_old_pwd": "Enter old password: ",
         "reencrypt_new_pwd": "Enter new password: ",
         "reencrypt_mode_prompt": "Target format (gcm/cbc/chacha20, Enter for gcm): ",
@@ -678,6 +690,18 @@ LANG = {
         "cli_auto_file_mode": "Existing {kind} detected; using file mode (no -f needed)",
         "cli_text_written": "Result written to {path}",
         "manifest_written": "Manifest written to {path} ({n} items)",
+        "cli_secure_help": "High-security mode: XChaCha20-Poly1305 + Argon2id 256 MiB / 4 passes / 4 threads",
+        "secure_hint": "High-security mode: XChaCha20-Poly1305 (24-byte random nonce) + Argon2id 256 MiB / 4 passes / 4 threads",
+        "menu_xchacha_encrypt": "XChaCha20-Poly1305 Encrypt (text)",
+        "menu_xchacha_decrypt": "XChaCha20-Poly1305 Decrypt (text)",
+        "menu_secure_encrypt": "High-Security Encrypt (file/dir)",
+        "menu_secure_decrypt": "High-Security Decrypt (file/dir)",
+        "err_xchacha_too_large": "File exceeds 200 GiB, beyond what one XChaCha20 key may cover; refused",
+        "err_kdf_header": "Invalid Argon2 parameters in the volume header (corrupted or tampered header)",
+        "xchacha_encrypted": "XChaCha20-Poly1305 encryption succeeded",
+        "xchacha_decrypted": "XChaCha20-Poly1305 decryption succeeded",
+        "secure_file_encrypted": "High-security encryption finished: {path}",
+        "secure_file_decrypted": "High-security decryption finished, saved to {path}",
     }
 }
 
@@ -764,6 +788,14 @@ _CONFIG_ENV_MAP = {
 
 CONFIG = load_config()
 
+# The default language comes from config.json / CRYPTPOUCH_LANG. It cannot be
+# applied where i18n is first created (that line runs before CONFIG exists), so
+# the module-level objects are re-bound here; anything that reads
+# cp_shared.i18n (the menu, cp_files, cp_utils) now sees the same language the
+# CLI was told to use.
+i18n = I18n(CONFIG.get("lang") or "zh")
+printer = Printer(i18n)
+
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -844,6 +876,45 @@ PREFIX_CHACHA20_V2 = b"$CC2$"
 PREFIX_AES_CBC_V3 = b"$AC3$"
 
 
+# XChaCha20-Poly1305 volumes (v2.13.0). Unlike the older formats this header
+# carries its own Argon2id parameters, so a volume stays decryptable after the
+# defaults change and the high-security preset can coexist with the standard
+# one under a single prefix.
+PREFIX_XCHACHA20 = b"$XS1$"
+
+
+XCHACHA_NONCE_SIZE = 24          # XChaCha20 extended nonce (no collision worry)
+
+
+KDF_HEADER_SIZE = 6              # memory_kib (4 BE) + time (1) + parallelism (1)
+
+
+# RFC 9106 style upper bounds for a header-supplied KDF cost. A crafted header
+# asking for 4 TiB would otherwise let a small file turn into a memory bomb.
+KDF_MEMORY_MIN_KIB = 8 * 1024
+
+
+KDF_MEMORY_MAX_KIB = 1024 * 1024
+
+
+KDF_TIME_MAX = 20
+
+
+KDF_PARALLELISM_MAX = 16
+
+
+# High-security preset: 4x the memory and one extra pass vs the 64 MiB default
+# (measured on this host: 0.10 s standard vs 0.51 s high, roughly 5x the
+# per-guess cost for a password cracker, at a memory footprint a 8 GB laptop
+# can still serve).
+HIGH_SECURITY_KDF = {"time_cost": 4, "memory_kib": 256 * 1024, "parallelism": 4}
+
+
+# XChaCha20 has a 256 GiB limit per (key, nonce). Refuse anything above this
+# with room to spare instead of failing halfway through a huge file.
+XCHACHA_MAX_FILE_SIZE = 200 * 1024 * 1024 * 1024
+
+
 ARGON2_TIME_COST = CONFIG["argon2_time_cost"]
 
 
@@ -900,7 +971,7 @@ CHUNK_SIZE = 1024 * 1024
 PROGRESS_THRESHOLD = 10 * 1024 * 1024
 
 
-CIPHER_MODES = ("gcm", "cbc", "chacha20")
+CIPHER_MODES = ("gcm", "cbc", "chacha20", "xchacha20")
 
 
 MAX_PASSWORD_ATTEMPTS = 5

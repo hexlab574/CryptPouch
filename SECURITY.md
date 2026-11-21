@@ -8,7 +8,8 @@ the known security considerations of the project.
 
 The following version series currently receive security support:
 
-- 2.12.x  -  actively supported (latest: 2.12.0)
+- 2.13.x  -  actively supported (latest: 2.13.0)
+- 2.12.x  -  supported (latest: 2.12.0)
 - 2.11.x  -  supported (latest: 2.11.4)
 - 2.10.x  -  supported (latest: 2.10.2)
 - 2.9.x  -  supported (latest: 2.9.0)
@@ -88,6 +89,32 @@ duration of the encryption and removes it in a finally block; unpacking
 validates every archive entry (absolute paths, parent traversal and escapes
 outside the destination are refused) before writing anything. No new cipher
 or key-derivation path is introduced.
+
+v2.13.0 adds one cipher (XChaCha20-Poly1305, `$XS1$`) and one key-derivation
+tier (Argon2id 256 MiB / 4 passes / 4 threads), both as explicit opt-ins. The
+default path is untouched: AES-256-GCM at 64 MiB / 3 / 4 stays what every
+existing command produces, and every volume written by earlier versions still
+decrypts. Three properties are worth stating precisely:
+
+- the `$XS1$` header stores its own Argon2id cost and those six bytes are
+  authenticated as associated data, so the cost cannot be edited without
+  failing the tag, and a volume made in high-security mode is readable on a
+  machine that was never told about it;
+- values read from that header are range-checked (memory 8 MiB to 1 GiB,
+  passes 1 to 20, parallelism 1 to 16) before Argon2id is called, so a
+  tampered header cannot demand an unbounded allocation. Values outside the
+  range are reported as a corrupted header and never retried;
+- one volume is capped at 200 GiB, below XChaCha20's own 256 GiB message
+  limit, so the stream can never reach a nonce-reuse boundary by accident.
+
+XChaCha20 was chosen over ChaCha20 for the new format because of the nonce:
+the 96-bit nonce of ChaCha20-Poly1305 carries a birthday bound that matters
+for a long-lived key, and the 24-byte XChaCha20 nonce removes it while keeping
+the same primitive. The pass counts come from RFC 9106 and were cross-checked
+against Picocrypt's documented Argon2id settings (that project uses 1 GiB,
+which is out of reach on an 8 GB machine; 256 MiB measured 507 ms here and was
+kept). The AES-256 path, the CBC fallback and the legacy decryption switches
+are unchanged; no default was relaxed and no format was removed.
 
 All reviews to date are author self-review. There is no third-party or paid
 security audit, and community validation is still limited; treat the
@@ -266,8 +293,21 @@ Plaintext zip while packing a directory
   while the volume is being produced, so run packing on the same trust basis
   as the plaintext itself.
 
-No secure-delete (shred) option
+High-security mode costs 256 MiB and about 0.5 s per key derivation
 
+- Reason: 256 MiB / 4 passes is RFC 9106's memory-hard setting, scaled down
+  from Picocrypt's 1 GiB because that figure does not fit an 8 GB machine with
+  a browser open. A single derivation measured 507 ms here against 95 ms at
+  the default, which is why the default was not raised for everyone.
+- Mitigation: high security is opt-in only (`--secure`, menu 30/31,
+  `secure=True`); the default stays at 64 MiB / 3 / 4. Keys are derived one
+  file at a time and wiped right after the cipher handle is built, so peak
+  memory is one derivation, not one per file. On a batch run the cost is
+  paid per file (about 0.5 s each, 2999 files is roughly 25 minutes): use it
+  for few, high-value files, or pack a tree into one volume first, and the
+  cost is paid once.
+
+No secure-delete (shred) option
 - Reason: overwriting a file does not erase it on SSDs, where wear leveling
   remaps blocks, and journaling or copy-on-write filesystems can retain the
   old blocks as well. A shred button would promise something it cannot

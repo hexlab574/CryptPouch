@@ -46,7 +46,8 @@ def _sha256_file(path, chunk_size=1024 * 1024):
     return h.hexdigest()
 
 
-def pack_encrypt(path, password, output_path=None, compress=True, overwrite=False):
+def pack_encrypt(path, password, output_path=None, compress=True, overwrite=False,
+                 cipher="aes-gcm", secure=False):
     """Pack a directory into one encrypted volume.
 
     Returns {"output": path, "files": n, "bytes": n}.
@@ -85,7 +86,7 @@ def pack_encrypt(path, password, output_path=None, compress=True, overwrite=Fals
                         total += os.path.getsize(full)
                     except OSError:
                         pass
-        cp_files.encrypt_file(tmp_zip, out, password)
+        cp_files.encrypt_file(tmp_zip, out, password, cipher=cipher, secure=secure)
     finally:
         try:
             os.remove(tmp_zip)

@@ -1,6 +1,6 @@
 # CryptPouch
 
-AES-256 encryption toolbox for local, single-user use. Version 2.12.0.
+AES-256 encryption toolbox for local, single-user use. Version 2.13.0.
 
 Interactive menu and command-line interface, with Chinese and English prompts.
 
@@ -10,6 +10,17 @@ Interactive menu and command-line interface, with Chinese and English prompts.
   helpers are split into small single-purpose modules behind a thin `CryptPouch.py`
   entry point
 - Text encryption: AES-256-GCM (Argon2id), AES-256-CBC + HMAC and ChaCha20-Poly1305
+- XChaCha20-Poly1305 volumes (v2.13.0): the `$XS1$` format uses a 24-byte random
+  nonce (safe for arbitrarily long-lived keys, no 96-bit birthday bound) and
+  keeps the Argon2id cost in the header, so a volume made in high-security mode
+  still decrypts on a machine that was never told which mode produced it
+- High-security mode (v2.13.0): `--secure` (CLI), menu entries 30/31, and
+  `secure=True` in the API switch to Argon2id 256 MiB / 4 passes / 4 threads
+  (four times the default memory, ~0.5 s on a typical laptop); the default
+  stayed at 64 MiB / 3 / 4 so routine runs are still fast
+- KDF parameters are validated on read (v2.13.0): a header that asks for a
+  memory or pass count outside the supported range is rejected before any
+  allocation, so a tampered header cannot turn decryption into a memory bomb
 - Authenticated ciphertext headers (v2.11.0): the $CP4$ / $CC2$ / $AC3$ formats bind
   prefix, salt and nonce/IV as associated data, so header tampering or a prefix
   swap fails authentication instead of decrypting to garbage; older ciphertext
@@ -75,7 +86,7 @@ re-exports the public symbols; each module has a single responsibility:
 | --- | --- |
 | `CryptPouch.py` | Entry point: interactive menu, CLI parser, public symbol re-export |
 | `cp_shared.py` | i18n, printer (ANSI), config loading/validation, constants, error classes |
-| `cp_crypto.py` | Cipher tools (GCM/CBC/ChaCha20), key derivation, hashing, password strength |
+| `cp_crypto.py` | Cipher tools (GCM/CBC/ChaCha20/XChaCha20), key derivation, hashing, password strength |
 | `cp_utils.py` | Safe input, password-length checks, permission restriction, decrypt retry |
 | `cp_files.py` | Streaming file encrypt/decrypt (atomic output), batch and re-encrypt helpers |
 | `cp_pack.py` | Directory packing (folder to one encrypted volume) and batch JSON manifests |
@@ -91,13 +102,14 @@ with `cp_admin` on top).
 
 | Area | Features |
 | --- | --- |
-| Symmetric encryption | AES-256-GCM (Argon2id, `$CP3$`), AES-256-CBC + HMAC (`$AC2$`), ChaCha20-Poly1305 (`$CC1$`, v2.8.0) for text and streaming files; automatic format detection on decrypt |
+| Symmetric encryption | AES-256-GCM (Argon2id, `$CP3$`), AES-256-CBC + HMAC (`$AC2$`), ChaCha20-Poly1305 (`$CC1$`, v2.8.0) for text, and XChaCha20-Poly1305 (`$XS1$`, v2.13.0) for text and streaming files; automatic format detection on decrypt |
+| High-security mode | Argon2id 256 MiB / 4 passes / 4 threads behind `--secure`, menu 30/31 and `secure=True`; the cost is written into the volume header, so decryption needs no flag |
 | Key rotation | One-step re-encryption to a new password / target format  -  v2 or legacy ciphertext is upgraded to v3 (Argon2id) without manual decrypt-then-encrypt |
 | Batch operations | Recursive directory scan with glob filters (`*.txt,*.md`), skips existing `.enc`, in-place `<file>.enc` output |
 | Asymmetric crypto | RSA 2048/3072/4096-bit keys, optional passphrase-protected private key, PKCS1_OAEP |
 | Utilities | Base64, text/file hashing (md5..blake2b), random password generator, strength checker, QR code generate/decode, content type & encoding detection |
 | Configuration | `~/.cryptpouch/config.json` + `CRYPTPOUCH_*` environment variables override defaults (CLI > env > config > defaults); optional `requirements-lock.txt` pins exact dependency versions |
-| Interfaces | Interactive bilingual menu (Chinese/English) and full CLI (`-e/-d/-f/-o/--hash/--lang/--cipher/--password-file/--pack/--unpack/--manifest`) |
+| Interfaces | Interactive bilingual menu (Chinese/English) and full CLI (`-e/-d/-f/-o/--hash/--lang/--cipher/--secure/--password-file/--pack/--unpack/--manifest`) |
 
 ### Typical use cases
 
@@ -106,6 +118,7 @@ with `cp_admin` on top).
 - **Password / key change**  -  rotate a shared or expired password with `reencrypt_*`; old v2 ciphertext is upgraded to the v3 Argon2id format automatically.
 - **Sending files across devices**  -  encrypt a file, transfer the `.enc` over any channel, decrypt at the destination; authenticated encryption catches any tampering.
 - **Low-power devices**  -  ChaCha20-Poly1305 is faster than AES-GCM on devices without AES hardware acceleration (ARM, Raspberry Pi, routers).
+- **Long-lived archives**  -  XChaCha20-Poly1305 (`--cipher xchacha20`) with its 24-byte nonce avoids the 96-bit nonce reuse limit, and `--secure` raises the Argon2id cost for data that has to stay confidential for years.
 - **Script automation / CI**  -  non-interactive CLI with `--password-file`, plus `config.json` / `CRYPTPOUCH_*` environment variables for deterministic runs in backup scripts or pipelines.
 - **Key exchange**  -  use RSA to wrap a symmetric key or short message; keep the private key passphrase-protected.
 - **Learning & research**  -  compare GCM vs CBC vs ChaCha20, Argon2id vs PBKDF2, or study authenticated-encryption failure modes (tamper is always rejected).
@@ -171,6 +184,15 @@ python CryptPouch.py -d path/to/folder.zip.enc --unpack -p "your password"
 
 # Batch run plus a JSON manifest (status, size and SHA-256 per file)
 python CryptPouch.py -e path/to/folder --manifest report.json -p "your password"
+
+# High-security mode: XChaCha20-Poly1305 + Argon2id 256 MiB / 4 passes / 4 threads
+python CryptPouch.py -e path/to/file -p "your password" --secure
+
+# XChaCha20-Poly1305 at the standard Argon2id cost (0.5 s is fine, 256 MiB is not)
+python CryptPouch.py -e path/to/file -p "your password" --cipher xchacha20
+
+# Decryption auto-detects the format and reads the cost from the header
+python CryptPouch.py -d path/to/file.enc -p "your password" -o restored.txt
 
 # Compute a file hash
 python CryptPouch.py --hash sha256 path/to/file

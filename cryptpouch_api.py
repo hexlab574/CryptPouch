@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-cryptpouch_api.py — AI-friendly Python API for CryptPouch v2.12.0
+cryptpouch_api.py — AI-friendly Python API for CryptPouch v2.13.0
 ================================================================
 
 A clean, non-interactive wrapper around CryptPouch.py so that AI agents,
@@ -81,11 +81,11 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "cryptpouch_api.py must sit in the same directory as CryptPouch.py "
-        "(v2.12.0). Feature dependencies: pip install pycryptodome argon2-cffi "
+        "(v2.13.0). Feature dependencies: pip install pycryptodome argon2-cffi "
         "pyzbar Pillow qrcode pyperclip"
     ) from exc
 
-__version__ = "2.12.0"
+__version__ = "2.13.0"
 
 __all__ = [
     "CryptPouchAPIError",
@@ -188,16 +188,22 @@ def _api_call(label, func, *args, **kwargs):
 # Text encryption / decryption
 # ----------------------------------------------------------------------
 
-def encrypt_text(plaintext: str, password: str, mode: str = "gcm") -> str:
+def encrypt_text(plaintext: str, password: str, mode: str = "gcm",
+                 secure: bool = False) -> str:
     """Encrypt text.
 
     Args:
         plaintext: text to encrypt (str).
         password:  passphrase (str).
         mode:      ``"gcm"`` (default; Argon2id + AES-256-GCM, ``$CP3$`` format),
-                   ``"cbc"`` (AES-256-CBC + HMAC, ``$AC2$`` format) or
+                   ``"cbc"`` (AES-256-CBC + HMAC, ``$AC2$`` format),
                    ``"chacha20"`` (ChaCha20-Poly1305, ``$CC1$`` format;
-                   great on devices without AES hardware acceleration).
+                   great on devices without AES hardware acceleration) or
+                   ``"xchacha20"`` (XChaCha20-Poly1305, ``$XS1$`` format with a
+                   24-byte nonce and the Argon2id cost stored in the payload).
+        secure:    when True, use the high-security Argon2id cost (256 MiB /
+                   4 passes / 4 threads) instead of the standard 64 MiB / 3 /
+                   4. Only meaningful for ``mode="xchacha20"``.
 
     Returns:
         The ciphertext as a single Base64 string, ready for ``decrypt_text``.
@@ -211,8 +217,10 @@ def encrypt_text(plaintext: str, password: str, mode: str = "gcm") -> str:
         tool = _cp.AESCBCWithHMACTool(password)
     elif mode == "chacha20":
         tool = _cp.ChaCha20Poly1305Tool(password)
+    elif mode == "xchacha20":
+        tool = _cp.XChaCha20Poly1305Tool(password, secure=secure)
     else:
-        raise ValueError("mode must be one of: gcm, cbc, chacha20")
+        raise ValueError("mode must be one of: gcm, cbc, chacha20, xchacha20")
     return _api_call("Encryption", tool.encrypt, plaintext)
 
 
@@ -237,20 +245,30 @@ def decrypt_text(ciphertext: str, password: str) -> str:
 # ----------------------------------------------------------------------
 
 def encrypt_file(input_path: str, password: str,
-                 output_path: Optional[str] = None) -> str:
-    """Encrypt a file in streaming mode (v3, AES-256-GCM + Argon2id).
+                 output_path: Optional[str] = None,
+                 cipher: str = "aes-gcm", secure: bool = False) -> str:
+    """Encrypt a file in streaming mode (v4 AES-256-GCM, or XChaCha20-Poly1305).
 
     Args:
         input_path:  path of the file to encrypt.
         password:    passphrase.
         output_path: optional output path; defaults to ``<input_path>.enc``.
+        cipher:      ``"aes-gcm"`` (default, ``$CP4$`` format) or
+                     ``"xchacha20"`` (``$XS1$`` format with a 24-byte nonce and
+                     the Argon2id cost self-described in the header).
+        secure:      when True, use the high-security Argon2id cost
+                     (256 MiB / 4 passes / 4 threads). Implies
+                     ``cipher="xchacha20"``.
 
     Returns:
         The output file path.
     """
     if output_path is None:
         output_path = input_path + ".enc"
-    _api_call("Encryption", _cp.encrypt_file, input_path, output_path, password)
+    if secure:
+        cipher = "xchacha20"
+    _api_call("Encryption", _cp.encrypt_file, input_path, output_path, password,
+              cipher=cipher, secure=secure)
     return output_path
 
 
@@ -282,13 +300,14 @@ def reencrypt_text(ciphertext: str, old_password: str, new_password: str,
                    mode: str = "gcm") -> str:
     """Re-encrypt text in ONE step: decrypt with ``old_password`` (auto-detects
     GCM/ChaCha20/CBC/legacy so v2 ciphertext is upgraded on the fly), then encrypt
-    with ``new_password`` in the target ``mode`` ("gcm" | "cbc" | "chacha20").
+    with ``new_password`` in the target ``mode`` ("gcm" | "cbc" | "chacha20" |
+    "xchacha20").
 
     Raises:
         CryptPouchAPIError: wrong old password, corrupted data, or unsupported mode.
     """
-    if mode not in ("gcm", "cbc", "chacha20"):
-        raise ValueError("mode must be one of: gcm, cbc, chacha20")
+    if mode not in ("gcm", "cbc", "chacha20", "xchacha20"):
+        raise ValueError("mode must be one of: gcm, cbc, chacha20, xchacha20")
     return _api_call("Re-encryption", _cp.reencrypt_text, ciphertext,
                      old_password, new_password, mode)
 
@@ -319,7 +338,8 @@ def reencrypt_file(input_path: str, old_password: str, new_password: str,
 # ----------------------------------------------------------------------
 
 def batch_encrypt(path: str, password: str, pattern: Optional[str] = None,
-                  recursive: bool = True, overwrite: bool = False) -> Dict[str, Any]:
+                  recursive: bool = True, overwrite: bool = False,
+                  cipher: str = "aes-gcm", secure: bool = False) -> Dict[str, Any]:
     """Recursively encrypt every matching file in ``path`` in place as ``<file>.enc``.
 
     Args:
@@ -329,12 +349,17 @@ def batch_encrypt(path: str, password: str, pattern: Optional[str] = None,
         recursive: whether to descend into subdirectories.
         overwrite: replace an existing ``<file>.enc``. The default keeps it, so a
                    repeated run is idempotent and never destroys older ciphertext.
+        cipher:   ``"aes-gcm"`` (default) or ``"xchacha20"``.
+        secure:   True = high-security Argon2id cost (implies ``cipher="xchacha20"``).
 
     Returns:
         ``{"encrypted": [output paths], "failed": [(path, error), ...],
         "skipped": [paths filtered out], "existing": [ciphertext kept]}``
     """
-    return _cp.batch_encrypt(path, password, pattern, recursive, overwrite)
+    if secure:
+        cipher = "xchacha20"
+    return _cp.batch_encrypt(path, password, pattern, recursive, overwrite,
+                             cipher=cipher, secure=secure)
 
 
 def batch_decrypt(path: str, password: str, pattern: Optional[str] = None,

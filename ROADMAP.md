@@ -1,5 +1,24 @@
 # CryptPouch Roadmap
 
+## Released: v2.13.0 (2026-11, XChaCha20-Poly1305 and a high-security mode)
+
+Two additions, both modeled on what Picocrypt (the reference implementation of
+this genre) actually does, and both built only on pycryptodome, argon2-cffi and
+the standard library, so the zero-dependency rule still holds. Nothing was
+removed or weakened: the AES-256-GCM default and every existing volume format
+are unchanged.
+
+| # | Item | Details |
+| --- | --- | --- |
+| 1 | XChaCha20-Poly1305 volumes (`$XS1$`) | A 24-byte random nonce removes the 96-bit nonce birthday bound, so one long-lived key can safely protect an unbounded number of volumes; 200 GiB per volume is refused up front (XChaCha20's own bound is 256 GiB). Available as `--cipher xchacha20`, menu 28/29 for text, and `cipher="xchacha20"` in the API. Picocrypt's `Internals.md` was read for the parameter choices, not copied blindly. |
+| 2 | High-security mode | `--secure` (CLI), menu 30/31, `secure=True` (API) select Argon2id 256 MiB / 4 passes / 4 threads instead of the default 64 MiB / 3 / 4. Measured on this host: 507 ms versus 95 ms per derivation, which is the reason the default was not raised. RFC 9106 lists 64 MiB / 3 / 4 as its second recommended setting, so the default was already there. |
+| 3 | KDF cost written into the header | The `$XS1$` header carries memory (KiB, 4 bytes BE), passes and parallelism, and those six bytes are authenticated as associated data. A high-security volume therefore decrypts with no flag, and a volume encrypted at 64 MiB still opens on a machine configured for 256 MiB. This also fixes the older `$CP4$` gap where the cost was implicit: changing the config made old volumes unreadable. |
+| 4 | Header values validated before use | Memory is clamped to 8 MiB..1 GiB, passes 1..20, parallelism 1..16 on read; anything else is reported as a corrupted header before Argon2id allocates, so a tampered header cannot be turned into a memory bomb. |
+| 5 | `--secure` implies the format it can actually harden | `--secure` with an AES-GCM text target used to be accepted while silently keeping the standard cost. It now switches the payload to XChaCha20 (whose header can carry the higher cost) instead of pretending. |
+| 6 | Menu language actually follows config / environment | `cp_shared.i18n` was created before `CONFIG` was loaded and was never re-bound, so `lang` in config.json or `CRYPTPOUCH_LANG=en` left the whole interactive menu in Chinese while CLI messages came out in English. Reproduced with `CRYPTPOUCH_LANG=en python CryptPouch.py`, fixed by publishing the chosen language to `cp_shared.i18n` and reading `CONFIG["lang"]` as the module default, then re-checked in both languages (menu entries 28-31 included). |
+
+Covered by 24 new tests (152 total).
+
 ## Released: v2.12.0 (2026-11, usable CLI and two learned features)
 
 Three usability defects, each reproduced on the host before the fix, plus two
