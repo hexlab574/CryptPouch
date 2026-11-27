@@ -1,7 +1,7 @@
-# 分发包（发行分支）
+# Distribution branch
 
-本分支不再存放二进制安装包。原 `CryptPouch-2.13.0` 的 Windows ZIP 和 Android APK 已于 2026-11-27 移除。
+This branch no longer hosts binary installers. The Windows ZIP and Android APK for CryptPouch 2.13.0 were removed on 2026-11-27.
 
-- 源码仍在 `main` 分支；
-- 后续二进制安装包与 SHA-256 校验值应在独立的 Release 仓库发布；
-- 本分支仅保留历史说明，不再提供下载。
+- Source code remains on `main`.
+- Future binary releases and SHA-256 checksums should be published in a dedicated releases repository.
+- This branch keeps historical notes only; no downloads are provided here.
